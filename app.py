@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from datetime import datetime
 from functools import wraps
 from html import escape
 from urllib.parse import quote
@@ -41,6 +42,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             driver_id INTEGER NOT NULL,
             score INTEGER NOT NULL,
+            comment TEXT,
             ip TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (driver_id) REFERENCES users(id)
@@ -55,6 +57,11 @@ def init_db():
 
     try:
         conn.execute("ALTER TABLE ratings ADD COLUMN ip TEXT;")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        conn.execute("ALTER TABLE ratings ADD COLUMN comment TEXT;")
     except sqlite3.OperationalError:
         pass
 
@@ -97,6 +104,16 @@ def close_db(error):
 
 def esc(value):
     return escape(str(value), quote=True)
+
+
+def format_rating_date(value):
+    if not value:
+        return "-"
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        return dt.strftime("%d/%m/%Y %H:%M")
+    except ValueError:
+        return value
 
 
 def render_page(title, body_html):
@@ -220,7 +237,8 @@ def render_page(title, body_html):
 
         input[type=text],
         input[type=password],
-        select {{
+        select,
+        textarea {{
             width: 100%;
             padding: 11px 12px;
             border: 1px solid #d2dbe0;
@@ -232,9 +250,15 @@ def render_page(title, body_html):
 
         input[type=text]:focus,
         input[type=password]:focus,
-        select:focus {{
+        select:focus,
+        textarea:focus {{
             border-color: var(--brand-1);
             box-shadow: 0 0 0 3px rgba(0, 188, 212, 0.15);
+        }}
+
+        textarea {{
+            min-height: 110px;
+            resize: vertical;
         }}
 
         button {{
@@ -396,6 +420,71 @@ def render_page(title, body_html):
             min-height: 18px;
             color: var(--text-muted);
             font-size: 0.88rem;
+        }}
+
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+            margin-bottom: 18px;
+        }}
+
+        .stat-card {{
+            padding: 16px;
+            border-radius: 16px;
+            background: linear-gradient(180deg, rgba(0, 188, 212, 0.10), rgba(224, 247, 250, 0.65));
+            border: 1px solid rgba(0, 139, 163, 0.16);
+        }}
+
+        .stat-label {{
+            color: var(--text-muted);
+            font-size: 0.86rem;
+            margin-bottom: 6px;
+        }}
+
+        .stat-value {{
+            font-size: 1.55rem;
+            font-weight: 800;
+        }}
+
+        .reviews-list {{
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }}
+
+        .review-card {{
+            padding: 16px;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            background: #fbfdfe;
+        }}
+
+        .review-top {{
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }}
+
+        .review-score {{
+            font-weight: 800;
+        }}
+
+        .review-date {{
+            color: var(--text-muted);
+            font-size: 0.86rem;
+        }}
+
+        .review-comment {{
+            white-space: pre-wrap;
+            line-height: 1.45;
+        }}
+
+        .review-empty {{
+            color: var(--text-muted);
+            font-style: italic;
         }}
     </style>
     <script>
@@ -983,22 +1072,73 @@ def cashier_dashboard():
 @login_required(role="driver")
 def driver_panel():
     user = current_user()
-    rate_url = request.url_root.rstrip("/") + url_for("rate_driver", driver_id=user["id"])
-    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=260x260&data={quote(rate_url, safe='')}"
+    summary = get_db().execute(
+        """
+        SELECT COUNT(*) AS total_avaliacoes,
+               COALESCE(ROUND(AVG(score), 2), 0) AS media
+        FROM ratings
+        WHERE driver_id = ?
+        """,
+        (user["id"],),
+    ).fetchone()
+    ratings = get_db().execute(
+        """
+        SELECT score, comment, created_at
+        FROM ratings
+        WHERE driver_id = ?
+        ORDER BY datetime(created_at) DESC, id DESC
+        """,
+        (user["id"],),
+    ).fetchall()
+
+    reviews_html = ""
+    for rating in ratings:
+        comment = (rating["comment"] or "").strip()
+        comment_html = (
+            f'<div class="review-comment">{esc(comment)}</div>'
+            if comment
+            else '<div class="review-empty">Cliente nao deixou comentario nesta avaliacao.</div>'
+        )
+        reviews_html += f"""
+        <div class="review-card">
+            <div class="review-top">
+                <div class="review-score">Nota: {rating['score']}/5</div>
+                <div class="review-date">{esc(format_rating_date(rating['created_at']))}</div>
+            </div>
+            {comment_html}
+        </div>
+        """
+
+    if not reviews_html:
+        reviews_html = """
+        <div class="review-card">
+            <div class="review-empty">Ainda nao ha avaliacoes para este motorista.</div>
+        </div>
+        """
 
     body = f"""
     <h1>Painel do Motorista</h1>
-    <p class="subtitle-center">Mostre este QR Code para o cliente avaliar o atendimento e a entrega.</p>
-    <div style="text-align:center; margin: 12px 0;">
-        <img src="{esc(qr_url)}" alt="QR Code do motorista" style="max-width: 82vw; border-radius: 16px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);">
+    <p class="subtitle-center">Aqui voce acompanha apenas as suas avaliacoes e os comentarios enviados pelos clientes.</p>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-label">Sua media atual</div>
+            <div class="stat-value">{summary['media']}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Total de avaliacoes</div>
+            <div class="stat-value">{summary['total_avaliacoes']}</div>
+        </div>
     </div>
-    <p class="subtitle-center" style="font-size: 0.88rem;">Ou compartilhe o link direto:</p>
-    <p style="text-align:center; margin-bottom: 16px;">
-        <code>{esc(rate_url)}</code>
-    </p>
+
     <div class="section">
-        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar</button>
+        <div class="section-title">Avaliacoes e comentarios recebidos</div>
+        <div class="section-subtitle">Cada linha mostra a nota individual e o comentario deixado pelo cliente.</div>
+        <div class="reviews-list">
+            {reviews_html}
+        </div>
     </div>
+
     <div class="section">
         <button class="btn-full btn-outline" type="button" onclick="window.location.href='/logout'">Sair</button>
     </div>
@@ -1041,10 +1181,13 @@ def rate_driver(driver_id):
             if score < 1 or score > 5:
                 msg = "Selecione uma nota entre 1 e 5 estrelas."
             else:
+                comment = request.form.get("comment", "").strip()
+                if len(comment) > 500:
+                    comment = comment[:500]
                 db = get_db()
                 db.execute(
-                    "INSERT INTO ratings (driver_id, score, ip) VALUES (?, ?, ?)",
-                    (driver_id, score, ip),
+                    "INSERT INTO ratings (driver_id, score, comment, ip) VALUES (?, ?, ?, ?)",
+                    (driver_id, score, comment, ip),
                 )
                 db.commit()
 
@@ -1082,6 +1225,8 @@ def rate_driver(driver_id):
             </div>
             <div id="rating-text" class="rating-text"></div>
         </div>
+        <label>Comentario sobre a entrega ou atendimento</label>
+        <textarea name="comment" maxlength="500" placeholder="Escreva aqui o que achou do atendimento do motorista e da entrega."></textarea>
         <button type="submit" class="btn-full">Enviar avaliacao</button>
     </form>
     """
