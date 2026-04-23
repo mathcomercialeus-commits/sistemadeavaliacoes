@@ -219,17 +219,20 @@ def render_page(title, body_html):
         }}
 
         input[type=text],
-        input[type=password] {{
+        input[type=password],
+        select {{
             width: 100%;
             padding: 11px 12px;
             border: 1px solid #d2dbe0;
             border-radius: 12px;
             font-size: 0.96rem;
             outline: none;
+            background: white;
         }}
 
         input[type=text]:focus,
-        input[type=password]:focus {{
+        input[type=password]:focus,
+        select:focus {{
             border-color: var(--brand-1);
             box-shadow: 0 0 0 3px rgba(0, 188, 212, 0.15);
         }}
@@ -925,11 +928,25 @@ def cashier_dashboard():
         ORDER BY name;
         """
     ).fetchall()
-
     driver_options = "".join(
-        f'<option value="{esc(driver["name"])}"></option><option value="{esc(driver["username"])}"></option>'
+        f'<option value="{driver["id"]}">{esc(driver["name"])} ({esc(driver["username"])})</option>'
         for driver in drivers
     )
+    select_html = (
+        f"""
+        <select name="driver_id" required>
+            <option value="">Selecione um motorista</option>
+            {driver_options}
+        </select>
+        """
+        if drivers
+        else """
+        <select name="driver_id" disabled>
+            <option value="">Nenhum motorista cadastrado</option>
+        </select>
+        """
+    )
+    submit_attrs = "" if drivers else ' disabled'
 
     msg = request.args.get("msg", "").strip()
     error = request.args.get("error", "").strip()
@@ -947,14 +964,11 @@ def cashier_dashboard():
 
     <div class="section">
         <div class="section-title">Imprimir etiqueta</div>
-        <div class="section-subtitle">Mesmo modo operacional separado do motorista: a caixa entra com login proprio e usa so a impressao.</div>
+        <div class="section-subtitle">Mesmo modo operacional separado do motorista: a caixa entra com login proprio e escolhe o motorista cadastrado para imprimir.</div>
         <form method="get" action="/cashier/print_label" target="_blank">
-            <label>Nome ou usuario do motorista</label>
-            <input type="text" name="driver_name" list="drivers-list" placeholder="Digite o nome do motorista" required>
-            <datalist id="drivers-list">
-                {driver_options}
-            </datalist>
-            <button type="submit">Gerar etiqueta com QR Code</button>
+            <label>Motorista cadastrado</label>
+            {select_html}
+            <button type="submit"{submit_attrs}>Gerar etiqueta com QR Code</button>
         </form>
     </div>
 
@@ -1077,17 +1091,21 @@ def rate_driver(driver_id):
 @app.route("/cashier/print_label")
 @login_required(role="cashier")
 def print_label():
-    lookup = request.args.get("driver_name", "").strip()
-    if not lookup:
-        return redirect(url_for("cashier_dashboard", error="Informe o nome do motorista para imprimir a etiqueta."))
+    try:
+        driver_id = int(request.args.get("driver_id", "0"))
+    except ValueError:
+        driver_id = 0
 
-    matches = find_driver_by_lookup(lookup)
-    if not matches:
-        return redirect(url_for("cashier_dashboard", error="Motorista nao encontrado. Confira o nome digitado."))
-    if len(matches) > 1:
-        return redirect(url_for("cashier_dashboard", error="Existe mais de um motorista com esse nome. Use nomes distintos no cadastro."))
+    if driver_id <= 0:
+        return redirect(url_for("cashier_dashboard", error="Selecione um motorista cadastrado para imprimir a etiqueta."))
 
-    driver = matches[0]
+    driver = get_db().execute(
+        "SELECT * FROM users WHERE id = ? AND role = 'driver'",
+        (driver_id,),
+    ).fetchone()
+    if not driver:
+        return redirect(url_for("cashier_dashboard", error="Motorista nao encontrado. Confira a lista cadastrada."))
+
     rate_url = request.url_root.rstrip("/") + url_for("rate_driver", driver_id=driver["id"])
     qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=320x320&data={quote(rate_url, safe='')}"
 
