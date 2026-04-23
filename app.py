@@ -1,35 +1,42 @@
+import os
 import sqlite3
-from flask import Flask, request, redirect, url_for, session, g
-from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
+from html import escape
+from urllib.parse import quote
+
+from flask import Flask, g, redirect, request, session, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
-app.secret_key = "TROQUE-ESSA-CHAVE-POR-UMA-SECRETA"
-DATABASE = "avaliacao_entregadores.db"
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "troque-essa-chave-no-deploy")
 
-# Flag global pra garantir que init_db rode só uma vez por processo
+DATABASE = os.environ.get("DATABASE_PATH", "avaliacao_entregadores.db")
+DEFAULT_ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "FARMALIMA")
+DEFAULT_ADMIN_NAME = os.environ.get("ADMIN_NAME", "Administrador")
+DEFAULT_ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Farma@lima3535")
+TRUST_PROXY_HEADERS = os.environ.get("TRUST_PROXY_HEADERS", "1") == "1"
+
 db_initialized = False
 
 
-# ---------------- BANCO DE DADOS ----------------
-
 def init_db():
-    """Cria as tabelas e o admin padrão, se ainda não existir."""
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
 
-    # Tabela de usuários (admin e motoristas)
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             name TEXT NOT NULL,
-            role TEXT NOT NULL,       -- 'admin' ou 'driver'
+            role TEXT NOT NULL CHECK (role IN ('admin', 'cashier', 'driver')),
             password_hash TEXT NOT NULL
         );
-    """)
+        """
+    )
 
-    # Tabela de avaliações (já com IP)
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS ratings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             driver_id INTEGER NOT NULL,
@@ -38,22 +45,35 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (driver_id) REFERENCES users(id)
         );
-    """)
+        """
+    )
 
-    # Se o banco for antigo e não tiver coluna ip, tenta adicionar
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ratings_driver_id ON ratings(driver_id);"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ratings_ip ON ratings(ip);")
+
     try:
         conn.execute("ALTER TABLE ratings ADD COLUMN ip TEXT;")
     except sqlite3.OperationalError:
-        # Se a coluna já existe, ignora o erro
         pass
 
-    # Cria admin padrão FARMALIMA se não existir
-    cur = conn.execute("SELECT id FROM users WHERE username = ?", ("FARMALIMA",))
-    if cur.fetchone() is None:
-        password_hash = generate_password_hash("Farma@lima3535")
+    admin = conn.execute(
+        "SELECT id FROM users WHERE username = ?",
+        (DEFAULT_ADMIN_USERNAME,),
+    ).fetchone()
+
+    if admin is None:
         conn.execute(
-            "INSERT INTO users (username, name, role, password_hash) VALUES (?, ?, ?, ?)",
-            ("FARMALIMA", "Administrador", "admin", password_hash),
+            """
+            INSERT INTO users (username, name, role, password_hash)
+            VALUES (?, ?, 'admin', ?)
+            """,
+            (
+                DEFAULT_ADMIN_USERNAME,
+                DEFAULT_ADMIN_NAME,
+                generate_password_hash(DEFAULT_ADMIN_PASSWORD),
+            ),
         )
 
     conn.commit()
@@ -69,31 +89,36 @@ def get_db():
 
 @app.teardown_appcontext
 def close_db(error):
+    del error
     db = g.pop("db", None)
     if db is not None:
         db.close()
 
 
-# ---------------- LAYOUT (MOBILE + TURQUESA + CARTÃO) ----------------
+def esc(value):
+    return escape(str(value), quote=True)
 
-def render_page(title: str, body_html: str) -> str:
-    """Monta uma página HTML responsiva com layout moderno."""
+
+def render_page(title, body_html):
     return f"""<!doctype html>
 <html lang="pt-BR">
 <head>
     <meta charset="utf-8">
-    <title>{title} · Avaliação de Entregas</title>
+    <title>{esc(title)} | Avaliacao de Entregas</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-
     <style>
         :root {{
-            --turq-light: #4de1ff;
-            --turq-main: #00bcd4;
-            --turq-dark: #008ba3;
-            --bg-dark: rgba(0, 0, 0, 0.25);
+            --brand-1: #00bcd4;
+            --brand-2: #008ba3;
+            --bg-1: #e0f7fa;
+            --text-main: #173042;
+            --text-muted: #607d8b;
             --card-bg: #ffffff;
-            --text-main: #023047;
-            --text-muted: #6c757d;
+            --danger-1: #ef5350;
+            --danger-2: #d32f2f;
+            --warning-1: #ffb300;
+            --warning-2: #f57c00;
+            --line: #e6edf1;
         }}
 
         * {{
@@ -102,181 +127,143 @@ def render_page(title: str, body_html: str) -> str:
 
         body {{
             margin: 0;
+            min-height: 100vh;
             font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-            background: linear-gradient(145deg, #e0f7fa, #00bcd4);
-            min-height: 100vh;
             color: var(--text-main);
+            background: linear-gradient(145deg, var(--bg-1), var(--brand-1));
         }}
 
-        /* Cabeçalho fixo */
         .topbar {{
-            position: fixed;
+            position: sticky;
             top: 0;
-            left: 0;
-            right: 0;
-            height: 56px;
+            z-index: 10;
             display: flex;
+            justify-content: center;
             align-items: center;
-            justify-content: center;
-            padding: 0 16px;
-            background: linear-gradient(135deg, var(--turq-main), var(--turq-dark));
-            color: #fff;
-            font-weight: 600;
-            letter-spacing: 0.03em;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-            z-index: 1000;
-        }}
-
-        .topbar span.logo-emoji {{
-            margin-right: 8px;
-            font-size: 22px;
-        }}
-
-        .topbar span.brand {{
-            font-size: 16px;
+            min-height: 56px;
+            padding: 12px 16px;
+            background: linear-gradient(135deg, var(--brand-1), var(--brand-2));
+            color: white;
+            font-weight: 700;
+            letter-spacing: 0.04em;
             text-transform: uppercase;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
         }}
 
-        /* Área de conteúdo */
         .page {{
-            min-height: 100vh;
-            padding: 80px 12px 24px; /* espaço pro cabeçalho */
             display: flex;
             justify-content: center;
+            padding: 18px 12px 32px;
         }}
 
-        /* Cartão central flutuando */
         .card {{
             width: 100%;
-            max-width: 900px;
+            max-width: 940px;
             background: var(--card-bg);
-            border-radius: 18px;
-            padding: 24px 18px 26px;
-            box-shadow: 0 16px 45px rgba(0,0,0,0.18);
-            position: relative;
-            overflow: hidden;
+            border-radius: 22px;
+            padding: 24px 18px 28px;
+            box-shadow: 0 18px 45px rgba(0, 0, 0, 0.14);
         }}
 
         @media (min-width: 768px) {{
             .card {{
-                padding: 32px 32px 34px;
-                border-radius: 22px;
+                padding: 34px 32px 36px;
             }}
         }}
 
-        .card::before {{
-            content: "";
-            position: absolute;
-            inset: 0;
-            background: radial-gradient(circle at 0 0, rgba(77,225,255,0.18), transparent 55%),
-                        radial-gradient(circle at 100% 100%, rgba(0,188,212,0.10), transparent 55%);
-            pointer-events: none;
-        }}
-
-        .card-inner {{
-            position: relative;
-            z-index: 1;
-        }}
-
         h1, h2, h3 {{
-            text-align: center;
             margin-top: 0;
+            text-align: center;
         }}
 
         h1 {{
-            font-size: 1.6rem;
-            margin-bottom: 0.4rem;
-        }}
-
-        h3 {{
-            font-size: 1.1rem;
-            margin-bottom: 0.6rem;
-            color: var(--text-muted);
+            margin-bottom: 8px;
         }}
 
         p {{
-            margin: 0.4rem 0;
+            margin: 0.45rem 0;
         }}
 
         .subtitle-center {{
             text-align: center;
             color: var(--text-muted);
-            font-size: 0.95rem;
-            margin-bottom: 1.2rem;
+            margin-bottom: 18px;
         }}
 
-        /* Formulários */
+        .section {{
+            margin-bottom: 20px;
+        }}
+
+        .section-title {{
+            margin-bottom: 6px;
+            font-size: 1rem;
+            font-weight: 700;
+        }}
+
+        .section-subtitle {{
+            margin-bottom: 10px;
+            font-size: 0.92rem;
+            color: var(--text-muted);
+        }}
+
         form {{
             display: flex;
             flex-direction: column;
             gap: 10px;
-            width: 100%;
         }}
 
         label {{
-            font-size: 0.9rem;
-            font-weight: 500;
+            font-size: 0.92rem;
             color: var(--text-muted);
+            font-weight: 600;
         }}
 
         input[type=text],
         input[type=password] {{
-            padding: 10px 12px;
-            border-radius: 10px;
-            border: 1px solid #d0d7de;
-            font-size: 0.95rem;
+            width: 100%;
+            padding: 11px 12px;
+            border: 1px solid #d2dbe0;
+            border-radius: 12px;
+            font-size: 0.96rem;
             outline: none;
-            transition: all 0.2s ease;
         }}
 
         input[type=text]:focus,
         input[type=password]:focus {{
-            border-color: var(--turq-main);
-            box-shadow: 0 0 0 2px rgba(0, 188, 212, 0.25);
+            border-color: var(--brand-1);
+            box-shadow: 0 0 0 3px rgba(0, 188, 212, 0.15);
         }}
 
-        /* Botões principais */
         button {{
-            padding: 11px 14px;
-            border-radius: 999px;
             border: none;
-            cursor: pointer;
-            font-weight: 600;
+            border-radius: 999px;
+            padding: 11px 14px;
             font-size: 0.95rem;
-            background: linear-gradient(135deg, var(--turq-main), var(--turq-dark));
-            color: #fff;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.16);
-            transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+            font-weight: 700;
+            color: white;
+            cursor: pointer;
+            background: linear-gradient(135deg, var(--brand-1), var(--brand-2));
+            box-shadow: 0 10px 22px rgba(0, 0, 0, 0.12);
         }}
 
         button:hover {{
-            transform: translateY(-1px);
-            box-shadow: 0 14px 30px rgba(0,0,0,0.22);
             filter: brightness(1.03);
-        }}
-
-        button:active {{
-            transform: translateY(0);
-            box-shadow: 0 8px 18px rgba(0,0,0,0.18);
+            transform: translateY(-1px);
         }}
 
         .btn-outline {{
-            background: #ffffff;
-            color: var(--turq-dark);
-            border: 1px solid rgba(0,188,212,0.25);
+            background: white;
+            color: var(--brand-2);
+            border: 1px solid rgba(0, 139, 163, 0.24);
             box-shadow: none;
         }}
 
         .btn-danger {{
-            background: linear-gradient(135deg, #ff5252, #e53935);
+            background: linear-gradient(135deg, var(--danger-1), var(--danger-2));
         }}
 
         .btn-warning {{
-            background: linear-gradient(135deg, #ffb300, #ff8f00);
+            background: linear-gradient(135deg, var(--warning-1), var(--warning-2));
         }}
 
         .btn-full {{
@@ -285,216 +272,158 @@ def render_page(title: str, body_html: str) -> str:
 
         .btn-sm {{
             padding: 7px 12px;
-            font-size: 0.8rem;
+            font-size: 0.82rem;
             box-shadow: none;
         }}
 
-        /* Mensagens */
+        .msg,
+        .erro {{
+            border-radius: 12px;
+            padding: 11px 12px;
+            margin-bottom: 14px;
+            font-size: 0.92rem;
+        }}
+
         .msg {{
-            padding: 10px 12px;
-            background:#e3f2fd;
-            border:1px solid #90caf9;
-            border-radius:10px;
-            margin-bottom:10px;
-            font-size:0.9rem;
+            background: #eaf7ff;
+            border: 1px solid #b6dcff;
         }}
 
         .erro {{
-            padding:10px 12px;
-            background:#ffebee;
-            border:1px solid #ef9a9a;
-            border-radius:10px;
-            margin-bottom:10px;
-            font-size:0.9rem;
+            background: #ffebee;
+            border: 1px solid #ef9a9a;
         }}
 
-        /* Tabela elegante */
         .table-wrapper {{
-            width: 100%;
             overflow-x: auto;
-            margin-top: 14px;
+            margin-top: 12px;
         }}
 
         table {{
-            width:100%;
-            border-collapse:separate;
-            border-spacing:0 6px;
-            font-size:0.85rem;
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0 8px;
+            font-size: 0.9rem;
         }}
 
-        thead tr th {{
-            background: rgba(2,48,71,0.06);
-            padding:8px 10px;
-            text-align:left;
-            color:var(--text-muted);
-            font-weight:600;
+        th {{
+            text-align: left;
+            padding: 8px 10px;
+            color: var(--text-muted);
+            background: rgba(23, 48, 66, 0.05);
         }}
 
-        tbody tr {{
-            background:#ffffff;
-            box-shadow:0 2px 8px rgba(0,0,0,0.04);
+        td {{
+            padding: 10px;
+            background: white;
+            border-top: 1px solid var(--line);
+            border-bottom: 1px solid var(--line);
         }}
 
-        tbody tr td {{
-            padding:8px 10px;
-            border-top:1px solid #f0f0f0;
-            border-bottom:1px solid #f0f0f0;
+        td:first-child {{
+            border-left: 1px solid var(--line);
+            border-top-left-radius: 12px;
+            border-bottom-left-radius: 12px;
         }}
 
-        tbody tr td:first-child {{
-            border-left:1px solid #f0f0f0;
-            border-top-left-radius:12px;
-            border-bottom-left-radius:12px;
-        }}
-
-        tbody tr td:last-child {{
-            border-right:1px solid #f0f0f0;
-            border-top-right-radius:12px;
-            border-bottom-right-radius:12px;
+        td:last-child {{
+            border-right: 1px solid var(--line);
+            border-top-right-radius: 12px;
+            border-bottom-right-radius: 12px;
         }}
 
         code {{
-            font-size:0.75rem;
-            background:#f1f8ff;
-            padding:4px 6px;
-            border-radius:6px;
-            display:inline-block;
-            max-width: 230px;
+            display: inline-block;
+            max-width: 260px;
             overflow-wrap: break-word;
+            padding: 4px 6px;
+            border-radius: 8px;
+            background: #f3f8fb;
+            font-size: 0.8rem;
         }}
 
-        /* Layout de ações em tabela */
         .table-actions {{
-            display:flex;
-            flex-wrap:wrap;
-            gap:6px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
         }}
 
-        /* Seções / agrupamentos */
-        .section {{
-            margin-bottom: 1.3rem;
-        }}
-
-        .section-title {{
-            font-size:1.0rem;
-            font-weight:600;
-            margin-bottom:0.2rem;
-        }}
-
-        .section-subtitle {{
-            font-size:0.85rem;
-            color:var(--text-muted);
-            margin-bottom:0.8rem;
-        }}
-
-        .spacer {{
-            height: 12px;
-        }}
-
-        /* Estrelas estilo iFood */
         .rating-container {{
-            display:flex;
-            flex-direction:column;
-            align-items:center;
-            gap:6px;
-            margin:10px 0 6px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            margin: 14px 0 10px;
         }}
 
         .rating-label {{
-            font-size:0.9rem;
-            color:var(--text-muted);
+            color: var(--text-muted);
+            font-size: 0.92rem;
         }}
 
         .stars {{
-            display:flex;
-            flex-direction:row-reverse;
-            justify-content:center;
-            gap:4px;
+            display: flex;
+            flex-direction: row-reverse;
+            justify-content: center;
+            gap: 4px;
         }}
 
         .stars input {{
-            display:none;
+            display: none;
         }}
 
         .stars label {{
-            font-size:32px;
-            cursor:pointer;
-            color:#cfd8dc;
-            transition:transform 0.12s ease, color 0.12s ease;
+            font-size: 34px;
+            color: #cfd8dc;
+            cursor: pointer;
+            transition: color 0.12s ease, transform 0.12s ease;
         }}
 
         .stars label:hover,
         .stars label:hover ~ label {{
-            color:#ffd54f;
-            transform:translateY(-1px);
+            color: #ffd54f;
+            transform: translateY(-1px);
         }}
 
         .stars input:checked ~ label {{
-            color:#ffc107;
-        }}
-
-        .stars input#score-1:checked ~ label[for="score-1"] {{
-            color:#ff6f00;
+            color: #ffc107;
         }}
 
         .rating-text {{
-            font-size:0.85rem;
-            color:var(--text-muted);
-            min-height:18px;
-        }}
-
-        @media (max-width: 480px) {{
-            h1 {{
-                font-size:1.3rem;
-            }}
-            .topbar {{
-                height:52px;
-            }}
-            .page {{
-                padding-top:76px;
-            }}
+            min-height: 18px;
+            color: var(--text-muted);
+            font-size: 0.88rem;
         }}
     </style>
-
     <script>
-        // Atualiza texto de "nota" igual apps de delivery
         function setupRatingText() {{
             var radios = document.querySelectorAll('input[name="score"]');
             var label = document.getElementById('rating-text');
+            if (!radios.length || !label) return;
 
-            if (!radios || !label) return;
-
-            var textos = {{
+            var texts = {{
                 1: "Muito ruim",
                 2: "Ruim",
                 3: "Ok",
                 4: "Muito bom",
-                5: "Excelente!"
+                5: "Excelente"
             }};
 
-            radios.forEach(function(r) {{
-                r.addEventListener('change', function() {{
-                    var v = parseInt(this.value);
-                    label.textContent = textos[v] || "";
+            radios.forEach(function (radio) {{
+                radio.addEventListener("change", function () {{
+                    label.textContent = texts[parseInt(this.value, 10)] || "";
                 }});
             }});
         }}
 
-        document.addEventListener("DOMContentLoaded", function() {{
-            setupRatingText();
-        }});
+        document.addEventListener("DOMContentLoaded", setupRatingText);
     </script>
 </head>
 <body>
-    <header class="topbar">
-        <span class="logo-emoji">🚚📦</span>
-        <span class="brand">Avaliação de Entregas</span>
-    </header>
+    <header class="topbar">Avaliacao de Entregas</header>
     <main class="page">
         <div class="card">
-            <div class="card-inner">
-                {body_html}
-            </div>
+            {body_html}
         </div>
     </main>
 </body>
@@ -502,26 +431,24 @@ def render_page(title: str, body_html: str) -> str:
 """
 
 
-# ---------------- AUXILIARES ----------------
-
 def get_client_ip():
-    """Tenta pegar o IP real do cliente, considerando proxy do Render."""
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    if TRUST_PROXY_HEADERS:
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     return request.remote_addr or "desconhecido"
 
 
 def current_user():
-    if "user_id" in session:
-        db = get_db()
-        cur = db.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],))
-        return cur.fetchone()
-    return None
+    user_id = session.get("user_id")
+    if not user_id:
+        return None
+    return get_db().execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
 
 def login_required(role=None):
     def decorator(fn):
+        @wraps(fn)
         def wrapper(*args, **kwargs):
             user = current_user()
             if not user:
@@ -529,12 +456,34 @@ def login_required(role=None):
             if role and user["role"] != role:
                 return "Acesso negado", 403
             return fn(*args, **kwargs)
-        wrapper.__name__ = fn.__name__
+
         return wrapper
+
     return decorator
 
 
-# ---------------- GARANTIR QUE O BANCO EXISTA ----------------
+def authenticate(username, password, role):
+    user = get_db().execute(
+        "SELECT * FROM users WHERE username = ? AND role = ?",
+        (username, role),
+    ).fetchone()
+    if user and check_password_hash(user["password_hash"], password):
+        return user
+    return None
+
+
+def find_driver_by_lookup(lookup):
+    return get_db().execute(
+        """
+        SELECT *
+        FROM users
+        WHERE role = 'driver'
+          AND (LOWER(name) = LOWER(?) OR LOWER(username) = LOWER(?))
+        ORDER BY name
+        """,
+        (lookup, lookup),
+    ).fetchall()
+
 
 @app.before_request
 def ensure_db():
@@ -544,69 +493,77 @@ def ensure_db():
         db_initialized = True
 
 
-# ---------------- ROTAS ----------------
-
 @app.route("/")
 def index():
     user = current_user()
     if user:
-        role_texto = "Administrador" if user["role"] == "admin" else "Motorista"
-        botoes = ""
+        role_map = {
+            "admin": "Administrador",
+            "cashier": "Caixa",
+            "driver": "Motorista",
+        }
+        role_text = role_map.get(user["role"], "Usuario")
+        buttons = ""
         if user["role"] == "admin":
-            botoes += '<p><button onclick="window.location.href=\'/admin/dashboard\'">Painel do Administrador</button></p>'
+            buttons += '<p><button class="btn-full" onclick="window.location.href=\'/admin/dashboard\'">Painel do Administrador</button></p>'
+        elif user["role"] == "cashier":
+            buttons += '<p><button class="btn-full" onclick="window.location.href=\'/cashier/dashboard\'">Painel da Caixa</button></p>'
         else:
-            botoes += '<p><button onclick="window.location.href=\'/driver/painel\'">Painel do Motorista</button></p>'
-        botoes += '<p><button class="btn-outline" onclick="window.location.href=\'/logout\'">Sair</button></p>'
+            buttons += '<p><button class="btn-full" onclick="window.location.href=\'/driver/painel\'">Painel do Motorista</button></p>'
+        buttons += '<p><button class="btn-full btn-outline" onclick="window.location.href=\'/logout\'">Sair</button></p>'
 
         body = f"""
-        <h1>Bem-vindo 👋</h1>
-        <p class="subtitle-center">Controle profissional de avaliação de entregas, em tempo real.</p>
-        <p style="text-align:center; margin-bottom:1.2rem;">
-            Logado como: <strong>{user['name']} ({role_texto})</strong>
+        <h1>Bem-vindo</h1>
+        <p class="subtitle-center">Controle profissional de avaliacao de entregas.</p>
+        <p style="text-align:center; margin-bottom: 18px;">
+            Logado como: <strong>{esc(user['name'])} ({esc(role_text)})</strong>
         </p>
-        {botoes}
+        {buttons}
         """
     else:
         body = """
-        <h1>🚚 Avaliação de Entregas</h1>
+        <h1>Avaliacao de Entregas</h1>
         <p class="subtitle-center">
-            Motoristas mostram o QR Code.<br>
-            Clientes avaliam o atendimento e o tempo de entrega em poucos toques.
+            Administrador cadastra os acessos.
+            Caixa imprime as etiquetas.
+            Motorista compartilha o QR Code.
         </p>
         <div class="section">
             <button class="btn-full" onclick="window.location.href='/admin/login'">Sou Administrador</button>
         </div>
         <div class="section">
+            <button class="btn-full btn-outline" onclick="window.location.href='/cashier/login'">Sou Caixa</button>
+        </div>
+        <div class="section">
             <button class="btn-full btn-outline" onclick="window.location.href='/driver/login'">Sou Motorista</button>
         </div>
         """
-    return render_page("Início", body)
 
+    return render_page("Inicio", body)
 
-# ----- LOGIN ADMIN -----
 
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     msg = ""
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
-        db = get_db()
-        cur = db.execute("SELECT * FROM users WHERE username = ? AND role = 'admin'", (username,))
-        user = cur.fetchone()
-        if user and check_password_hash(user["password_hash"], password):
+        user = authenticate(
+            request.form.get("username", "").strip(),
+            request.form.get("password", ""),
+            "admin",
+        )
+        if user:
             session["user_id"] = user["id"]
             return redirect(url_for("admin_dashboard"))
-        msg = "Usuário ou senha inválidos."
+        msg = "Usuario ou senha invalidos."
 
-    msg_html = f'<div class="erro">{msg}</div>' if msg else ""
+    msg_html = f'<div class="erro">{esc(msg)}</div>' if msg else ""
     body = f"""
-    <h1>Login do Administrador 🔐</h1>
-    <p class="subtitle-center">Acesse para gerenciar motoristas e acompanhar as avaliações.</p>
+    <h1>Login do Administrador</h1>
+    <p class="subtitle-center">Cadastre motoristas e caixas a partir desta area.</p>
     {msg_html}
     <form method="post" class="section">
-        <label>Usuário</label>
-        <input type="text" name="username" value="FARMALIMA">
+        <label>Usuario</label>
+        <input type="text" name="username" value="{esc(DEFAULT_ADMIN_USERNAME)}">
         <label>Senha</label>
         <input type="password" name="password">
         <button type="submit" class="btn-full">Entrar</button>
@@ -618,186 +575,60 @@ def admin_login():
     return render_page("Login Admin", body)
 
 
-# ----- PAINEL ADMIN -----
+@app.route("/cashier/login", methods=["GET", "POST"])
+def cashier_login():
+    msg = ""
+    if request.method == "POST":
+        user = authenticate(
+            request.form.get("username", "").strip(),
+            request.form.get("password", ""),
+            "cashier",
+        )
+        if user:
+            session["user_id"] = user["id"]
+            return redirect(url_for("cashier_dashboard"))
+        msg = "Usuario ou senha invalidos."
 
-@app.route("/admin/dashboard")
-@login_required(role="admin")
-def admin_dashboard():
-    db = get_db()
-    cur = db.execute("""
-        SELECT u.id, u.name,
-               COUNT(r.id) AS total_avaliacoes,
-               COALESCE(ROUND(AVG(r.score), 2), 0) AS media
-        FROM users u
-        LEFT JOIN ratings r ON u.id = r.driver_id
-        WHERE u.role = 'driver'
-        GROUP BY u.id, u.name
-        ORDER BY u.name;
-    """)
-    drivers = cur.fetchall()
-
-    linhas = ""
-    base_url = request.url_root.rstrip("/")
-    for d in drivers:
-        link_avaliacao = f"{base_url}{url_for('rate_driver', driver_id=d['id'])}"
-        linhas += f"""
-        <tr>
-            <td>{d['name']}</td>
-            <td>{d['media']}</td>
-            <td>{d['total_avaliacoes']}</td>
-            <td><code>{link_avaliacao}</code></td>
-            <td>
-                <div class="table-actions">
-                    <form method="post" action="/admin/reset_ratings/{d['id']}">
-                        <button class="btn-warning btn-sm"
-                            onclick="return confirm('Zerar as avaliações deste motorista?');">
-                            Zerar
-                        </button>
-                    </form>
-                    <form method="post" action="/admin/delete_driver/{d['id']}">
-                        <button class="btn-danger btn-sm"
-                            onclick="return confirm('EXCLUIR este motorista e todas as avaliações dele?');">
-                            Excluir
-                        </button>
-                    </form>
-                </div>
-            </td>
-        </tr>
-        """
-
+    msg_html = f'<div class="erro">{esc(msg)}</div>' if msg else ""
     body = f"""
-    <h1>Painel do Administrador 🧑‍💼</h1>
-    <p class="subtitle-center">
-        Cadastre motoristas, acompanhe notas e controle a qualidade das entregas.
-    </p>
-
+    <h1>Login da Caixa</h1>
+    <p class="subtitle-center">Entre para gerar e imprimir as etiquetas de avaliacao.</p>
+    {msg_html}
+    <form method="post" class="section">
+        <label>Usuario</label>
+        <input type="text" name="username">
+        <label>Senha</label>
+        <input type="password" name="password">
+        <button type="submit" class="btn-full">Entrar</button>
+    </form>
     <div class="section">
-        <div class="section-title">Cadastrar novo motorista</div>
-        <div class="section-subtitle">Crie o login que o entregador vai usar para gerar o QR Code.</div>
-        <form method="post" action="/admin/create_driver">
-            <label>Nome do motorista</label>
-            <input type="text" name="name" required>
-            <label>Usuário para login do motorista</label>
-            <input type="text" name="username" required>
-            <label>Senha para login do motorista</label>
-            <input type="password" name="password" required>
-            <button type="submit">Cadastrar Motorista</button>
-        </form>
-    </div>
-
-    <div class="section">
-        <div class="section-title">Motoristas cadastrados</div>
-        <div class="section-subtitle">Acompanhe notas e acesse o link de avaliação de cada um.</div>
-        <div class="table-wrapper">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Motorista</th>
-                        <th>Média</th>
-                        <th># Avaliações</th>
-                        <th>Link público</th>
-                        <th>Ações</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {linhas}
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <div class="section">
-        <form method="post" action="/admin/reset_all_ratings">
-            <button class="btn-danger btn-full"
-                onclick="return confirm('ZERAR TODAS as avaliações do sistema?');">
-                Zerar TODAS as avaliações
-            </button>
-        </form>
-    </div>
-
-    <div class="section">
-        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar ao início</button>
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar</button>
     </div>
     """
-    return render_page("Painel Admin", body)
+    return render_page("Login Caixa", body)
 
-
-@app.route("/admin/create_driver", methods=["POST"])
-@login_required(role="admin")
-def create_driver():
-    name = request.form.get("name", "").strip()
-    username = request.form.get("username", "").strip()
-    password = request.form.get("password", "")
-    if not name or not username or not password:
-        return "Dados inválidos", 400
-
-    db = get_db()
-    try:
-        password_hash = generate_password_hash(password)
-        db.execute(
-            "INSERT INTO users (username, name, role, password_hash) VALUES (?, ?, 'driver', ?)",
-            (username, name, password_hash),
-        )
-        db.commit()
-    except sqlite3.IntegrityError:
-        return "Usuário já existe", 400
-
-    return redirect(url_for("admin_dashboard"))
-
-
-@app.route("/admin/reset_ratings/<int:driver_id>", methods=["POST"])
-@login_required(role="admin")
-def reset_ratings(driver_id):
-    db = get_db()
-    db.execute("DELETE FROM ratings WHERE driver_id = ?", (driver_id,))
-    db.commit()
-    return redirect(url_for("admin_dashboard"))
-
-
-@app.route("/admin/reset_all_ratings", methods=["POST"])
-@login_required(role="admin")
-def reset_all_ratings():
-    db = get_db()
-    db.execute("DELETE FROM ratings")
-    db.commit()
-    return redirect(url_for("admin_dashboard"))
-
-
-@app.route("/admin/delete_driver/<int:driver_id>", methods=["POST"])
-@login_required(role="admin")
-def delete_driver(driver_id):
-    db = get_db()
-    db.execute("DELETE FROM ratings WHERE driver_id = ?", (driver_id,))
-    db.execute("DELETE FROM users WHERE id = ?", (driver_id,))
-    db.commit()
-    return redirect(url_for("admin_dashboard"))
-
-
-# ----- LOGIN MOTORISTA -----
 
 @app.route("/driver/login", methods=["GET", "POST"])
 def driver_login():
     msg = ""
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
-        db = get_db()
-        cur = db.execute("SELECT * FROM users WHERE username = ? AND role = 'driver'", (username,))
-        user = cur.fetchone()
-        if user and check_password_hash(user["password_hash"], password):
+        user = authenticate(
+            request.form.get("username", "").strip(),
+            request.form.get("password", ""),
+            "driver",
+        )
+        if user:
             session["user_id"] = user["id"]
             return redirect(url_for("driver_panel"))
-        msg = "Usuário ou senha inválidos."
+        msg = "Usuario ou senha invalidos."
 
-    msg_html = f'<div class="erro">{msg}</div>' if msg else ""
+    msg_html = f'<div class="erro">{esc(msg)}</div>' if msg else ""
     body = f"""
-    <h1>Login do Motorista 🛵</h1>
-    <p class="subtitle-center">
-        Entre para gerar seu QR Code e compartilhar com os clientes.
-    </p>
+    <h1>Login do Motorista</h1>
+    <p class="subtitle-center">Entre para visualizar o QR Code do seu link de avaliacao.</p>
     {msg_html}
     <form method="post" class="section">
-        <label>Usuário</label>
+        <label>Usuario</label>
         <input type="text" name="username">
         <label>Senha</label>
         <input type="password" name="password">
@@ -810,28 +641,346 @@ def driver_login():
     return render_page("Login Motorista", body)
 
 
-# ----- PAINEL MOTORISTA (QR CODE) -----
+@app.route("/admin/dashboard")
+@login_required(role="admin")
+def admin_dashboard():
+    drivers = get_db().execute(
+        """
+        SELECT u.id, u.name, u.username,
+               COUNT(r.id) AS total_avaliacoes,
+               COALESCE(ROUND(AVG(r.score), 2), 0) AS media
+        FROM users u
+        LEFT JOIN ratings r ON u.id = r.driver_id
+        WHERE u.role = 'driver'
+        GROUP BY u.id, u.name, u.username
+        ORDER BY u.name;
+        """
+    ).fetchall()
+
+    msg = request.args.get("msg", "").strip()
+    error = request.args.get("error", "").strip()
+    msg_html = f'<div class="msg">{esc(msg)}</div>' if msg else ""
+    error_html = f'<div class="erro">{esc(error)}</div>' if error else ""
+
+    rows = ""
+    base_url = request.url_root.rstrip("/")
+    for driver in drivers:
+        rate_url = f"{base_url}{url_for('rate_driver', driver_id=driver['id'])}"
+        rows += f"""
+        <tr>
+            <td>{esc(driver['name'])}</td>
+            <td>{esc(driver['username'])}</td>
+            <td>{driver['media']}</td>
+            <td>{driver['total_avaliacoes']}</td>
+            <td><code>{esc(rate_url)}</code></td>
+            <td>
+                <div class="table-actions">
+                    <form method="post" action="/admin/reset_ratings/{driver['id']}">
+                        <button class="btn-warning btn-sm" onclick="return confirm('Zerar as avaliacoes deste motorista?');">Zerar</button>
+                    </form>
+                    <form method="post" action="/admin/delete_driver/{driver['id']}">
+                        <button class="btn-danger btn-sm" onclick="return confirm('Excluir este motorista e as avaliacoes dele?');">Excluir</button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    <h1>Painel do Administrador</h1>
+    <p class="subtitle-center">Administrador cadastra logins e senhas para motoristas e caixas.</p>
+    {msg_html}
+    {error_html}
+
+    <div class="section">
+        <div class="section-title">Equipe da caixa</div>
+        <div class="section-subtitle">A caixa entra em uma area separada e usa apenas a impressao.</div>
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/admin/cashiers'">Gerenciar caixas</button>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Cadastrar motorista</div>
+        <div class="section-subtitle">Crie o login e a senha do motorista.</div>
+        <form method="post" action="/admin/create_driver">
+            <label>Nome do motorista</label>
+            <input type="text" name="name" required>
+            <label>Usuario para login do motorista</label>
+            <input type="text" name="username" required>
+            <label>Senha para login do motorista</label>
+            <input type="password" name="password" required>
+            <button type="submit">Cadastrar motorista</button>
+        </form>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Motoristas cadastrados</div>
+        <div class="section-subtitle">Acompanhe as notas e o link publico de avaliacao.</div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>Usuario</th>
+                        <th>Media</th>
+                        <th>Avaliacoes</th>
+                        <th>Link</th>
+                        <th>Acoes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <form method="post" action="/admin/reset_all_ratings">
+            <button class="btn-danger btn-full" onclick="return confirm('Zerar todas as avaliacoes do sistema?');">Zerar todas as avaliacoes</button>
+        </form>
+    </div>
+
+    <div class="section">
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar ao inicio</button>
+    </div>
+    """
+    return render_page("Painel Admin", body)
+
+
+@app.route("/admin/cashiers")
+@login_required(role="admin")
+def admin_cashiers():
+    cashiers = get_db().execute(
+        """
+        SELECT id, name, username
+        FROM users
+        WHERE role = 'cashier'
+        ORDER BY name;
+        """
+    ).fetchall()
+
+    msg = request.args.get("msg", "").strip()
+    error = request.args.get("error", "").strip()
+    msg_html = f'<div class="msg">{esc(msg)}</div>' if msg else ""
+    error_html = f'<div class="erro">{esc(error)}</div>' if error else ""
+
+    rows = ""
+    for cashier in cashiers:
+        rows += f"""
+        <tr>
+            <td>{esc(cashier['name'])}</td>
+            <td>{esc(cashier['username'])}</td>
+            <td>
+                <div class="table-actions">
+                    <form method="post" action="/admin/delete_cashier/{cashier['id']}">
+                        <button class="btn-danger btn-sm" onclick="return confirm('Excluir este caixa?');">Excluir</button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    <h1>Gestao de Caixas</h1>
+    <p class="subtitle-center">O administrador cria os acessos da equipe do caixa.</p>
+    {msg_html}
+    {error_html}
+
+    <div class="section">
+        <div class="section-title">Cadastrar caixa</div>
+        <div class="section-subtitle">Esse login acessa apenas a area de impressao.</div>
+        <form method="post" action="/admin/create_cashier">
+            <label>Nome do caixa</label>
+            <input type="text" name="name" required>
+            <label>Usuario para login do caixa</label>
+            <input type="text" name="username" required>
+            <label>Senha para login do caixa</label>
+            <input type="password" name="password" required>
+            <button type="submit">Cadastrar caixa</button>
+        </form>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Caixas cadastrados</div>
+        <div class="section-subtitle">Esses acessos usam o mesmo modo operacional separado do motorista.</div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>Usuario</th>
+                        <th>Acoes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/admin/dashboard'">Voltar para o admin</button>
+    </div>
+    """
+    return render_page("Gestao de Caixas", body)
+
+
+@app.route("/admin/create_driver", methods=["POST"])
+@login_required(role="admin")
+def create_driver():
+    name = request.form.get("name", "").strip()
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+
+    if not name or not username or not password:
+        return "Dados invalidos", 400
+
+    try:
+        get_db().execute(
+            """
+            INSERT INTO users (username, name, role, password_hash)
+            VALUES (?, ?, 'driver', ?)
+            """,
+            (username, name, generate_password_hash(password)),
+        )
+        get_db().commit()
+    except sqlite3.IntegrityError:
+        return redirect(url_for("admin_dashboard", error="Ja existe um usuario com esse login."))
+
+    return redirect(url_for("admin_dashboard", msg="Motorista cadastrado com sucesso."))
+
+
+@app.route("/admin/create_cashier", methods=["POST"])
+@login_required(role="admin")
+def create_cashier():
+    name = request.form.get("name", "").strip()
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+
+    if not name or not username or not password:
+        return "Dados invalidos", 400
+
+    try:
+        get_db().execute(
+            """
+            INSERT INTO users (username, name, role, password_hash)
+            VALUES (?, ?, 'cashier', ?)
+            """,
+            (username, name, generate_password_hash(password)),
+        )
+        get_db().commit()
+    except sqlite3.IntegrityError:
+        return redirect(url_for("admin_cashiers", error="Ja existe um usuario com esse login."))
+
+    return redirect(url_for("admin_cashiers", msg="Caixa cadastrado com sucesso."))
+
+
+@app.route("/admin/reset_ratings/<int:driver_id>", methods=["POST"])
+@login_required(role="admin")
+def reset_ratings(driver_id):
+    db = get_db()
+    db.execute("DELETE FROM ratings WHERE driver_id = ?", (driver_id,))
+    db.commit()
+    return redirect(url_for("admin_dashboard", msg="Avaliacoes do motorista zeradas."))
+
+
+@app.route("/admin/reset_all_ratings", methods=["POST"])
+@login_required(role="admin")
+def reset_all_ratings():
+    db = get_db()
+    db.execute("DELETE FROM ratings")
+    db.commit()
+    return redirect(url_for("admin_dashboard", msg="Todas as avaliacoes foram zeradas."))
+
+
+@app.route("/admin/delete_driver/<int:driver_id>", methods=["POST"])
+@login_required(role="admin")
+def delete_driver(driver_id):
+    db = get_db()
+    db.execute("DELETE FROM ratings WHERE driver_id = ?", (driver_id,))
+    db.execute("DELETE FROM users WHERE id = ? AND role = 'driver'", (driver_id,))
+    db.commit()
+    return redirect(url_for("admin_dashboard", msg="Motorista removido com sucesso."))
+
+
+@app.route("/admin/delete_cashier/<int:cashier_id>", methods=["POST"])
+@login_required(role="admin")
+def delete_cashier(cashier_id):
+    db = get_db()
+    db.execute("DELETE FROM users WHERE id = ? AND role = 'cashier'", (cashier_id,))
+    db.commit()
+    return redirect(url_for("admin_cashiers", msg="Caixa removido com sucesso."))
+
+
+@app.route("/cashier/dashboard")
+@login_required(role="cashier")
+def cashier_dashboard():
+    user = current_user()
+    drivers = get_db().execute(
+        """
+        SELECT id, name, username
+        FROM users
+        WHERE role = 'driver'
+        ORDER BY name;
+        """
+    ).fetchall()
+
+    driver_options = "".join(
+        f'<option value="{esc(driver["name"])}"></option><option value="{esc(driver["username"])}"></option>'
+        for driver in drivers
+    )
+
+    msg = request.args.get("msg", "").strip()
+    error = request.args.get("error", "").strip()
+    msg_html = f'<div class="msg">{esc(msg)}</div>' if msg else ""
+    error_html = f'<div class="erro">{esc(error)}</div>' if error else ""
+
+    body = f"""
+    <h1>Painel da Caixa</h1>
+    <p class="subtitle-center">
+        Login ativo: <strong>{esc(user['name'])}</strong>.
+        Digite o motorista cadastrado e gere a etiqueta.
+    </p>
+    {msg_html}
+    {error_html}
+
+    <div class="section">
+        <div class="section-title">Imprimir etiqueta</div>
+        <div class="section-subtitle">Mesmo modo operacional separado do motorista: a caixa entra com login proprio e usa so a impressao.</div>
+        <form method="get" action="/cashier/print_label" target="_blank">
+            <label>Nome ou usuario do motorista</label>
+            <input type="text" name="driver_name" list="drivers-list" placeholder="Digite o nome do motorista" required>
+            <datalist id="drivers-list">
+                {driver_options}
+            </datalist>
+            <button type="submit">Gerar etiqueta com QR Code</button>
+        </form>
+    </div>
+
+    <div class="section">
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/logout'">Sair</button>
+    </div>
+    """
+    return render_page("Painel da Caixa", body)
+
 
 @app.route("/driver/painel")
 @login_required(role="driver")
 def driver_panel():
     user = current_user()
-    rate_url = request.url_root.rstrip('/') + url_for("rate_driver", driver_id=user["id"])
-    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=260x260&data={rate_url}"
+    rate_url = request.url_root.rstrip("/") + url_for("rate_driver", driver_id=user["id"])
+    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=260x260&data={quote(rate_url, safe='')}"
 
     body = f"""
-    <h1>Painel do Motorista 🚚</h1>
-    <p class="subtitle-center">
-        Mostre o QR Code abaixo para o cliente avaliar atendimento e tempo de entrega.
-    </p>
-    <div style="text-align:center; margin: 10px 0 6px;">
-        <img src="{qr_url}" alt="QR Code" style="border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,0.20); max-width:80vw;">
+    <h1>Painel do Motorista</h1>
+    <p class="subtitle-center">Mostre este QR Code para o cliente avaliar o atendimento e a entrega.</p>
+    <div style="text-align:center; margin: 12px 0;">
+        <img src="{esc(qr_url)}" alt="QR Code do motorista" style="max-width: 82vw; border-radius: 16px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);">
     </div>
-    <p class="subtitle-center" style="font-size:0.85rem;">
-        Ou compartilhe o link direto:
-    </p>
-    <p style="text-align:center; margin-bottom:1rem;">
-        <code>{rate_url}</code>
+    <p class="subtitle-center" style="font-size: 0.88rem;">Ou compartilhe o link direto:</p>
+    <p style="text-align:center; margin-bottom: 16px;">
+        <code>{esc(rate_url)}</code>
     </p>
     <div class="section">
         <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar</button>
@@ -840,32 +989,35 @@ def driver_panel():
         <button class="btn-full btn-outline" type="button" onclick="window.location.href='/logout'">Sair</button>
     </div>
     """
-    return render_page("Painel Motorista", body)
+    return render_page("Painel do Motorista", body)
 
-
-# ----- PÁGINA DE AVALIAÇÃO (COM ANTIFRAUDE POR IP + ESTRELAS IFOOD) -----
 
 @app.route("/avaliar/<int:driver_id>", methods=["GET", "POST"])
 def rate_driver(driver_id):
-    db = get_db()
-    cur = db.execute("SELECT * FROM users WHERE id = ? AND role = 'driver'", (driver_id,))
-    driver = cur.fetchone()
+    driver = get_db().execute(
+        "SELECT * FROM users WHERE id = ? AND role = 'driver'",
+        (driver_id,),
+    ).fetchone()
+
     if not driver:
-        return "Motorista não encontrado", 404
+        return "Motorista nao encontrado", 404
 
     msg = ""
     ip = get_client_ip()
 
     if request.method == "POST":
-        # Verifica se este IP já avaliou ALGUM motorista nos últimos 7 dias
-        cur = db.execute(
-            "SELECT COUNT(*) AS total FROM ratings "
-            "WHERE ip = ? AND created_at >= datetime('now','-7 days')",
+        row = get_db().execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM ratings
+            WHERE ip = ?
+              AND created_at >= datetime('now', '-7 days')
+            """,
             (ip,),
-        )
-        row = cur.fetchone()
+        ).fetchone()
+
         if row["total"] > 0:
-            msg = "Você já fez uma avaliação recentemente. Só é permitido 1 avaliação por semana neste dispositivo."
+            msg = "Voce ja fez uma avaliacao recentemente. E permitido apenas 1 envio por semana neste dispositivo."
         else:
             try:
                 score = int(request.form.get("score", "0"))
@@ -875,28 +1027,28 @@ def rate_driver(driver_id):
             if score < 1 or score > 5:
                 msg = "Selecione uma nota entre 1 e 5 estrelas."
             else:
+                db = get_db()
                 db.execute(
                     "INSERT INTO ratings (driver_id, score, ip) VALUES (?, ?, ?)",
                     (driver_id, score, ip),
                 )
                 db.commit()
+
                 body = f"""
-                <h1>Obrigado pela sua avaliação 💙</h1>
-                <p class="subtitle-center">
-                    Sua opinião ajuda a melhorar a qualidade das entregas.
-                </p>
-                <p style="text-align:center; margin-top:1rem;">
-                    Motorista avaliado: <strong>{driver['name']}</strong>
+                <h1>Obrigado pela sua avaliacao</h1>
+                <p class="subtitle-center">Sua opiniao ajuda a melhorar a qualidade das entregas.</p>
+                <p style="text-align:center; margin-top: 14px;">
+                    Motorista avaliado: <strong>{esc(driver['name'])}</strong>
                 </p>
                 """
                 return render_page("Obrigado", body)
 
-    msg_html = f'<div class="erro">{msg}</div>' if msg else ""
+    msg_html = f'<div class="erro">{esc(msg)}</div>' if msg else ""
     body = f"""
-    <h1>Avalie sua entrega ⭐</h1>
+    <h1>Avalie sua entrega</h1>
     <p class="subtitle-center">
-        Motorista: <strong>{driver['name']}</strong><br>
-        Como você avalia <strong>atendimento</strong> e <strong>tempo de entrega</strong>?
+        Motorista: <strong>{esc(driver['name'])}</strong><br>
+        Como voce avalia o atendimento e o tempo de entrega?
     </p>
     {msg_html}
     <form method="post">
@@ -904,26 +1056,167 @@ def rate_driver(driver_id):
             <div class="rating-label">Toque nas estrelas para escolher a nota:</div>
             <div class="stars">
                 <input type="radio" id="score-5" name="score" value="5">
-                <label for="score-5">★</label>
+                <label for="score-5">&#9733;</label>
                 <input type="radio" id="score-4" name="score" value="4">
-                <label for="score-4">★</label>
+                <label for="score-4">&#9733;</label>
                 <input type="radio" id="score-3" name="score" value="3">
-                <label for="score-3">★</label>
+                <label for="score-3">&#9733;</label>
                 <input type="radio" id="score-2" name="score" value="2">
-                <label for="score-2">★</label>
+                <label for="score-2">&#9733;</label>
                 <input type="radio" id="score-1" name="score" value="1">
-                <label for="score-1">★</label>
+                <label for="score-1">&#9733;</label>
             </div>
             <div id="rating-text" class="rating-text"></div>
         </div>
-        <div class="spacer"></div>
-        <button type="submit" class="btn-full">Enviar avaliação</button>
+        <button type="submit" class="btn-full">Enviar avaliacao</button>
     </form>
     """
-    return render_page("Avaliar Entregador", body)
+    return render_page("Avaliar", body)
 
 
-# ----- LOGOUT -----
+@app.route("/cashier/print_label")
+@login_required(role="cashier")
+def print_label():
+    lookup = request.args.get("driver_name", "").strip()
+    if not lookup:
+        return redirect(url_for("cashier_dashboard", error="Informe o nome do motorista para imprimir a etiqueta."))
+
+    matches = find_driver_by_lookup(lookup)
+    if not matches:
+        return redirect(url_for("cashier_dashboard", error="Motorista nao encontrado. Confira o nome digitado."))
+    if len(matches) > 1:
+        return redirect(url_for("cashier_dashboard", error="Existe mais de um motorista com esse nome. Use nomes distintos no cadastro."))
+
+    driver = matches[0]
+    rate_url = request.url_root.rstrip("/") + url_for("rate_driver", driver_id=driver["id"])
+    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=320x320&data={quote(rate_url, safe='')}"
+
+    body = f"""
+    <style>
+        .label-shell {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }}
+
+        .label-card {{
+            width: 100%;
+            max-width: 420px;
+            padding: 18px;
+            text-align: center;
+            border-radius: 18px;
+            background: white;
+            border: 2px dashed rgba(23, 48, 66, 0.18);
+            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.10);
+        }}
+
+        .label-eyebrow {{
+            margin-bottom: 8px;
+            color: #008ba3;
+            font-size: 0.78rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }}
+
+        .label-title {{
+            margin-bottom: 8px;
+            font-size: 1.35rem;
+            font-weight: 800;
+            line-height: 1.2;
+        }}
+
+        .label-driver {{
+            margin-bottom: 14px;
+            font-size: 1rem;
+        }}
+
+        .label-qr img {{
+            width: 220px;
+            height: 220px;
+            object-fit: contain;
+        }}
+
+        .label-footer {{
+            margin-top: 12px;
+            color: #526674;
+            font-size: 0.92rem;
+        }}
+
+        .label-actions {{
+            display: flex;
+            gap: 10px;
+            width: 100%;
+            max-width: 420px;
+        }}
+
+        .label-actions button {{
+            flex: 1;
+        }}
+
+        @media print {{
+            body {{
+                background: white !important;
+            }}
+
+            .topbar,
+            .label-actions {{
+                display: none !important;
+            }}
+
+            .page {{
+                padding: 0 !important;
+                min-height: auto !important;
+            }}
+
+            .card {{
+                max-width: none !important;
+                padding: 0 !important;
+                border-radius: 0 !important;
+                box-shadow: none !important;
+            }}
+
+            .label-card {{
+                width: 90mm;
+                min-height: 60mm;
+                margin: 0 auto;
+                border: 1px solid #d6dde2;
+                box-shadow: none;
+                page-break-inside: avoid;
+            }}
+        }}
+    </style>
+
+    <div class="label-shell">
+        <div class="label-card">
+            <div class="label-eyebrow">Etiqueta de avaliacao</div>
+            <div class="label-title">Avalie nosso entregador e nossa entrega</div>
+            <div class="label-driver">Motorista: <strong>{esc(driver['name'])}</strong></div>
+            <div class="label-qr">
+                <img src="{esc(qr_url)}" alt="QR Code para avaliar a entrega">
+            </div>
+            <div class="label-footer">
+                Aponte a camera do celular para o QR Code e deixe sua nota.
+            </div>
+        </div>
+
+        <div class="label-actions">
+            <button type="button" onclick="window.print()">Imprimir novamente</button>
+            <button type="button" class="btn-outline" onclick="window.close()">Fechar</button>
+        </div>
+    </div>
+
+    <script>
+        window.addEventListener("load", function () {{
+            setTimeout(function () {{
+                window.print();
+            }}, 250);
+        }});
+    </script>
+    """
+    return render_page("Imprimir Etiqueta", body)
+
 
 @app.route("/logout")
 def logout():
@@ -931,8 +1224,10 @@ def logout():
     return redirect(url_for("index"))
 
 
-# ---------------- MAIN (LOCAL) ----------------
-
 if __name__ == "__main__":
     init_db()
-    app.run(debug=True)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "5000")),
+        debug=os.environ.get("FLASK_DEBUG") == "1",
+    )
