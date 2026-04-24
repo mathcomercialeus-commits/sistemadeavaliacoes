@@ -705,6 +705,29 @@ def get_print_log_rows(limit=200):
     ).fetchall()
 
 
+def get_driver_for_comments(driver_id):
+    return get_db().execute(
+        """
+        SELECT id, name, username
+        FROM users
+        WHERE id = ? AND role = 'driver'
+        """,
+        (driver_id,),
+    ).fetchone()
+
+
+def get_driver_comment_rows(driver_id):
+    return get_db().execute(
+        """
+        SELECT score, comment, created_at
+        FROM ratings
+        WHERE driver_id = ?
+        ORDER BY datetime(created_at) DESC, id DESC
+        """,
+        (driver_id,),
+    ).fetchall()
+
+
 def render_manager_dashboard():
     drivers = get_driver_score_rows()
     logs = get_print_log_rows()
@@ -717,6 +740,9 @@ def render_manager_dashboard():
             <td>{esc(driver['username'])}</td>
             <td>{driver['media']}</td>
             <td>{driver['total_avaliacoes']}</td>
+            <td>
+                <button class="btn-sm" type="button" onclick="window.location.href='/manager/driver/{driver['id']}/comments'">Ver comentarios</button>
+            </td>
         </tr>
         """
 
@@ -736,7 +762,7 @@ def render_manager_dashboard():
         """
 
     if not driver_rows:
-        driver_rows = '<tr><td colspan="4">Nenhum motorista cadastrado.</td></tr>'
+        driver_rows = '<tr><td colspan="5">Nenhum motorista cadastrado.</td></tr>'
     if not log_rows:
         log_rows = '<tr><td colspan="5">Nenhuma etiqueta impressa ainda.</td></tr>'
 
@@ -754,6 +780,7 @@ def render_manager_dashboard():
                         <th>Usuario</th>
                         <th>Media</th>
                         <th>Avaliacoes</th>
+                        <th>Comentarios</th>
                     </tr>
                 </thead>
                 <tbody>{driver_rows}</tbody>
@@ -785,6 +812,59 @@ def render_manager_dashboard():
     </div>
     """
     return render_page("Painel Gestor", body)
+
+
+def render_manager_driver_comments(driver_id):
+    driver = get_driver_for_comments(driver_id)
+    if not driver:
+        return "Motorista nao encontrado", 404
+
+    ratings = get_driver_comment_rows(driver_id)
+    comments_html = ""
+    for rating in ratings:
+        comment = (rating["comment"] or "").strip()
+        comment_html = (
+            f'<div class="review-comment">{esc(comment)}</div>'
+            if comment
+            else '<div class="review-empty">Cliente nao deixou comentario nesta avaliacao.</div>'
+        )
+        comments_html += f"""
+        <div class="review-card">
+            <div class="review-top">
+                <div class="review-score">Nota: {rating['score']}/5</div>
+                <div class="review-date">{esc(format_rating_date(rating['created_at']))}</div>
+            </div>
+            {comment_html}
+        </div>
+        """
+
+    if not comments_html:
+        comments_html = """
+        <div class="review-card">
+            <div class="review-empty">Ainda nao ha avaliacoes para este motorista.</div>
+        </div>
+        """
+
+    body = f"""
+    <h1>Comentarios do Motorista</h1>
+    <p class="subtitle-center">
+        Motorista: <strong>{esc(driver['name'])}</strong><br>
+        Usuario: {esc(driver['username'])}
+    </p>
+
+    <div class="section">
+        <div class="section-title">Avaliacoes individuais</div>
+        <div class="section-subtitle">Cada item mostra a nota e o comentario deixado pelo cliente.</div>
+        <div class="reviews-list">
+            {comments_html}
+        </div>
+    </div>
+
+    <div class="section">
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/manager/dashboard'">Voltar para o gestor</button>
+    </div>
+    """
+    return render_page("Comentarios do Motorista", body)
 
 
 @app.before_request
@@ -986,6 +1066,12 @@ def manager_login():
 @login_required(role="manager")
 def manager_dashboard():
     return render_manager_dashboard()
+
+
+@app.route("/manager/driver/<int:driver_id>/comments")
+@login_required(role="manager")
+def manager_driver_comments(driver_id):
+    return render_manager_driver_comments(driver_id)
 
 
 @app.route("/admin/dashboard")
