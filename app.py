@@ -1353,6 +1353,7 @@ def reset_all_ratings():
 def delete_driver(driver_id):
     db = get_db()
     db.execute("DELETE FROM ratings WHERE driver_id = ?", (driver_id,))
+    db.execute("DELETE FROM rating_tokens WHERE driver_id = ?", (driver_id,))
     db.execute("DELETE FROM users WHERE id = ? AND role = 'driver'", (driver_id,))
     db.commit()
     return redirect(url_for("admin_dashboard", msg="Motorista removido com sucesso."))
@@ -1362,6 +1363,7 @@ def delete_driver(driver_id):
 @login_required(role="admin")
 def delete_cashier(cashier_id):
     db = get_db()
+    db.execute("UPDATE rating_tokens SET cashier_id = NULL WHERE cashier_id = ?", (cashier_id,))
     db.execute("DELETE FROM users WHERE id = ? AND role = 'cashier'", (cashier_id,))
     db.commit()
     return redirect(url_for("admin_cashiers", msg="Caixa removido com sucesso."))
