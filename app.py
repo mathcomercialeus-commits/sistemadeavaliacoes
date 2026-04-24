@@ -684,11 +684,27 @@ def get_driver_score_rows():
     ).fetchall()
 
 
-def get_print_log_rows(limit=200):
+def date_filter_sql(column_name, start_date, end_date):
+    clauses = []
+    params = []
+    if start_date:
+        clauses.append(f"DATE({column_name}) >= ?")
+        params.append(start_date)
+    if end_date:
+        clauses.append(f"DATE({column_name}) <= ?")
+        params.append(end_date)
+    return clauses, params
+
+
+def get_print_log_rows(limit=200, start_date="", end_date=""):
+    clauses, params = date_filter_sql("rt.created_at", start_date, end_date)
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
     return get_db().execute(
         """
         SELECT rt.id,
                rt.invoice_number,
+               rt.cashier_id,
                rt.created_at,
                rt.used_at,
                d.name AS driver_name,
@@ -698,10 +714,45 @@ def get_print_log_rows(limit=200):
         FROM rating_tokens rt
         JOIN users d ON d.id = rt.driver_id
         LEFT JOIN users c ON c.id = rt.cashier_id
+        {where_sql}
         ORDER BY rt.created_at DESC, rt.id DESC
         LIMIT ?
+        """.format(where_sql=where_sql),
+        tuple(params),
+    ).fetchall()
+
+
+def get_cashier_for_prints(cashier_id):
+    return get_db().execute(
+        """
+        SELECT id, name, username
+        FROM users
+        WHERE id = ? AND role = 'cashier'
         """,
-        (limit,),
+        (cashier_id,),
+    ).fetchone()
+
+
+def get_cashier_print_rows(cashier_id, start_date="", end_date="", limit=500):
+    clauses, params = date_filter_sql("rt.created_at", start_date, end_date)
+    clauses.append("rt.cashier_id = ?")
+    params.append(cashier_id)
+    params.append(limit)
+    return get_db().execute(
+        """
+        SELECT rt.id,
+               rt.invoice_number,
+               rt.created_at,
+               rt.used_at,
+               d.name AS driver_name,
+               d.username AS driver_username
+        FROM rating_tokens rt
+        JOIN users d ON d.id = rt.driver_id
+        WHERE {where_sql}
+        ORDER BY rt.created_at DESC, rt.id DESC
+        LIMIT ?
+        """.format(where_sql=" AND ".join(clauses)),
+        tuple(params),
     ).fetchall()
 
 
@@ -729,8 +780,10 @@ def get_driver_comment_rows(driver_id):
 
 
 def render_manager_dashboard():
+    start_date = request.args.get("start_date", "").strip()
+    end_date = request.args.get("end_date", "").strip()
     drivers = get_driver_score_rows()
-    logs = get_print_log_rows()
+    logs = get_print_log_rows(start_date=start_date, end_date=end_date)
 
     driver_rows = ""
     for driver in drivers:
@@ -751,10 +804,13 @@ def render_manager_dashboard():
         used_text = "Usado" if item["used_at"] else "Ainda nao usado"
         cashier_name = item["cashier_name"] or "Caixa removido"
         cashier_username = item["cashier_username"] or "-"
+        cashier_cell = f"{esc(cashier_name)}<br><small>{esc(cashier_username)}</small>"
+        if item["cashier_id"]:
+            cashier_cell += f'<br><button class="btn-sm" type="button" onclick="window.location.href=\'/manager/cashier/{item["cashier_id"]}/prints\'">Ver notas impressas</button>'
         log_rows += f"""
         <tr>
             <td>{esc(format_rating_date(item['created_at']))}</td>
-            <td>{esc(cashier_name)}<br><small>{esc(cashier_username)}</small></td>
+            <td>{cashier_cell}</td>
             <td>{esc(item['invoice_number'])}</td>
             <td>{esc(item['driver_name'])}<br><small>{esc(item['driver_username'])}</small></td>
             <td>{used_text}</td>
@@ -791,6 +847,13 @@ def render_manager_dashboard():
     <div class="section">
         <div class="section-title">Log de impressoes das caixas</div>
         <div class="section-subtitle">Mostra caixa, numero da nota fiscal e motorista de cada etiqueta emitida.</div>
+        <form method="get" action="/manager/dashboard" class="section">
+            <label>Data inicial</label>
+            <input type="date" name="start_date" value="{esc(start_date)}">
+            <label>Data final</label>
+            <input type="date" name="end_date" value="{esc(end_date)}">
+            <button type="submit" class="btn-full">Filtrar log</button>
+        </form>
         <div class="table-wrapper">
             <table>
                 <thead>
@@ -865,6 +928,72 @@ def render_manager_driver_comments(driver_id):
     </div>
     """
     return render_page("Comentarios do Motorista", body)
+
+
+def render_manager_cashier_prints(cashier_id):
+    cashier = get_cashier_for_prints(cashier_id)
+    if not cashier:
+        return "Caixa nao encontrado", 404
+
+    start_date = request.args.get("start_date", "").strip()
+    end_date = request.args.get("end_date", "").strip()
+    prints = get_cashier_print_rows(cashier_id, start_date=start_date, end_date=end_date)
+
+    rows = ""
+    for item in prints:
+        used_text = "Usado" if item["used_at"] else "Ainda nao usado"
+        rows += f"""
+        <tr>
+            <td>{esc(format_rating_date(item['created_at']))}</td>
+            <td>{esc(item['invoice_number'])}</td>
+            <td>{esc(item['driver_name'])}<br><small>{esc(item['driver_username'])}</small></td>
+            <td>{used_text}</td>
+        </tr>
+        """
+
+    if not rows:
+        rows = '<tr><td colspan="4">Nenhuma nota impressa neste periodo.</td></tr>'
+
+    body = f"""
+    <h1>Notas Impressas</h1>
+    <p class="subtitle-center">
+        Caixa: <strong>{esc(cashier['name'])}</strong><br>
+        Usuario: {esc(cashier['username'])}
+    </p>
+
+    <div class="section">
+        <div class="section-title">Filtrar por data</div>
+        <form method="get" action="/manager/cashier/{cashier['id']}/prints">
+            <label>Data inicial</label>
+            <input type="date" name="start_date" value="{esc(start_date)}">
+            <label>Data final</label>
+            <input type="date" name="end_date" value="{esc(end_date)}">
+            <button type="submit" class="btn-full">Filtrar notas impressas</button>
+        </form>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Notas fiscais impressas</div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Data</th>
+                        <th>Nota fiscal</th>
+                        <th>Motorista</th>
+                        <th>Status do QR</th>
+                    </tr>
+                </thead>
+                <tbody>{rows}</tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/manager/dashboard'">Voltar para o gestor</button>
+    </div>
+    """
+    return render_page("Notas Impressas", body)
 
 
 @app.before_request
@@ -1072,6 +1201,12 @@ def manager_dashboard():
 @login_required(role="manager")
 def manager_driver_comments(driver_id):
     return render_manager_driver_comments(driver_id)
+
+
+@app.route("/manager/cashier/<int:cashier_id>/prints")
+@login_required(role="manager")
+def manager_cashier_prints(cashier_id):
+    return render_manager_cashier_prints(cashier_id)
 
 
 @app.route("/admin/dashboard")
