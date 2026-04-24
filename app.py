@@ -1,6 +1,7 @@
 import os
 import sqlite3
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
 from functools import wraps
 from html import escape
 from urllib.parse import quote
@@ -8,21 +9,72 @@ from urllib.parse import quote
 from flask import Flask, g, redirect, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except ImportError:
+    psycopg2 = None
+    RealDictCursor = None
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "troque-essa-chave-no-deploy")
 
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_POSTGRES = bool(DATABASE_URL)
 DATABASE = os.environ.get("DATABASE_PATH", "avaliacao_entregadores.db")
 DEFAULT_ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "FARMALIMA")
 DEFAULT_ADMIN_NAME = os.environ.get("ADMIN_NAME", "Administrador")
 DEFAULT_ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Farma@lima3535")
 TRUST_PROXY_HEADERS = os.environ.get("TRUST_PROXY_HEADERS", "1") == "1"
+LABEL_TOKEN_EXPIRY_HOURS = int(os.environ.get("LABEL_TOKEN_EXPIRY_HOURS", "48"))
 
 db_initialized = False
 
 
-def init_db():
+class PostgresConnection:
+    def __init__(self, url):
+        if psycopg2 is None:
+            raise RuntimeError("psycopg2-binary nao instalado. Rode pip install -r requirements.txt.")
+        self.conn = psycopg2.connect(url, cursor_factory=RealDictCursor)
+
+    def execute(self, sql, params=()):
+        cur = self.conn.cursor()
+        cur.execute(to_postgres_sql(sql), params)
+        return cur
+
+    def commit(self):
+        self.conn.commit()
+
+    def close(self):
+        self.conn.close()
+
+
+def to_postgres_sql(sql):
+    return (
+        sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        .replace("?", "%s")
+        .replace("datetime('now', '-7 days')", "NOW() - INTERVAL '7 days'")
+        .replace("ORDER BY datetime(created_at) DESC", "ORDER BY created_at DESC")
+    )
+
+
+def connect_db():
+    if USE_POSTGRES:
+        return PostgresConnection(DATABASE_URL)
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
+    return conn
+
+
+DB_INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
+DB_OPERATIONAL_ERRORS = (sqlite3.OperationalError,)
+if psycopg2 is not None:
+    DB_INTEGRITY_ERRORS = DB_INTEGRITY_ERRORS + (psycopg2.IntegrityError,)
+    DB_OPERATIONAL_ERRORS = DB_OPERATIONAL_ERRORS + (psycopg2.Error,)
+
+
+def init_db():
+    conn = connect_db()
 
     conn.execute(
         """
@@ -51,19 +103,41 @@ def init_db():
     )
 
     conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rating_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token TEXT UNIQUE NOT NULL,
+            driver_id INTEGER NOT NULL,
+            cashier_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,
+            used_at TIMESTAMP,
+            FOREIGN KEY (driver_id) REFERENCES users(id),
+            FOREIGN KEY (cashier_id) REFERENCES users(id)
+        );
+        """
+    )
+
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_ratings_driver_id ON ratings(driver_id);"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ratings_ip ON ratings(ip);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rating_tokens_token ON rating_tokens(token);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rating_tokens_driver_id ON rating_tokens(driver_id);")
 
-    try:
-        conn.execute("ALTER TABLE ratings ADD COLUMN ip TEXT;")
-    except sqlite3.OperationalError:
-        pass
+    if USE_POSTGRES:
+        conn.execute("ALTER TABLE ratings ADD COLUMN IF NOT EXISTS ip TEXT;")
+        conn.execute("ALTER TABLE ratings ADD COLUMN IF NOT EXISTS comment TEXT;")
+    else:
+        try:
+            conn.execute("ALTER TABLE ratings ADD COLUMN ip TEXT;")
+        except DB_OPERATIONAL_ERRORS:
+            pass
 
-    try:
-        conn.execute("ALTER TABLE ratings ADD COLUMN comment TEXT;")
-    except sqlite3.OperationalError:
-        pass
+        try:
+            conn.execute("ALTER TABLE ratings ADD COLUMN comment TEXT;")
+        except DB_OPERATIONAL_ERRORS:
+            pass
 
     admin = conn.execute(
         "SELECT id FROM users WHERE username = ?",
@@ -89,8 +163,7 @@ def init_db():
 
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(DATABASE)
-        g.db.row_factory = sqlite3.Row
+        g.db = connect_db()
     return g.db
 
 
@@ -755,16 +828,14 @@ def admin_dashboard():
     error_html = f'<div class="erro">{esc(error)}</div>' if error else ""
 
     rows = ""
-    base_url = request.url_root.rstrip("/")
     for driver in drivers:
-        rate_url = f"{base_url}{url_for('rate_driver', driver_id=driver['id'])}"
         rows += f"""
         <tr>
             <td>{esc(driver['name'])}</td>
             <td>{esc(driver['username'])}</td>
             <td>{driver['media']}</td>
             <td>{driver['total_avaliacoes']}</td>
-            <td><code>{esc(rate_url)}</code></td>
+            <td>QR unico gerado pela caixa</td>
             <td>
                 <div class="table-actions">
                     <form method="post" action="/admin/reset_ratings/{driver['id']}">
@@ -806,7 +877,7 @@ def admin_dashboard():
 
     <div class="section">
         <div class="section-title">Motoristas cadastrados</div>
-        <div class="section-subtitle">Acompanhe as notas e o link publico de avaliacao.</div>
+        <div class="section-subtitle">Acompanhe as notas. As avaliacoes entram por QR unico gerado pela caixa.</div>
         <div class="table-wrapper">
             <table>
                 <thead>
@@ -815,7 +886,7 @@ def admin_dashboard():
                         <th>Usuario</th>
                         <th>Media</th>
                         <th>Avaliacoes</th>
-                        <th>Link</th>
+                        <th>Etiqueta</th>
                         <th>Acoes</th>
                     </tr>
                 </thead>
@@ -937,7 +1008,7 @@ def create_driver():
             (username, name, generate_password_hash(password)),
         )
         get_db().commit()
-    except sqlite3.IntegrityError:
+    except DB_INTEGRITY_ERRORS:
         return redirect(url_for("admin_dashboard", error="Ja existe um usuario com esse login."))
 
     return redirect(url_for("admin_dashboard", msg="Motorista cadastrado com sucesso."))
@@ -962,7 +1033,7 @@ def create_cashier():
             (username, name, generate_password_hash(password)),
         )
         get_db().commit()
-    except sqlite3.IntegrityError:
+    except DB_INTEGRITY_ERRORS:
         return redirect(url_for("admin_cashiers", error="Ja existe um usuario com esse login."))
 
     return redirect(url_for("admin_cashiers", msg="Caixa cadastrado com sucesso."))
@@ -1148,13 +1219,62 @@ def driver_panel():
 
 @app.route("/avaliar/<int:driver_id>", methods=["GET", "POST"])
 def rate_driver(driver_id):
-    driver = get_db().execute(
-        "SELECT * FROM users WHERE id = ? AND role = 'driver'",
-        (driver_id,),
+    body = """
+    <h1>Use a etiqueta atual</h1>
+    <p class="subtitle-center">
+        As avaliacoes agora usam um QR Code unico por impressao.
+    </p>
+    <p style="text-align:center;">
+        Solicite uma nova etiqueta no caixa para registrar a avaliacao.
+    </p>
+    """
+    return render_page("Nova etiqueta necessaria", body), 410
+
+
+@app.route("/avaliar/token/<token>", methods=["GET", "POST"])
+def rate_token(token):
+    token_row = get_db().execute(
+        """
+        SELECT rt.id,
+               rt.driver_id,
+               CASE WHEN rt.used_at IS NOT NULL THEN 1 ELSE 0 END AS is_used,
+               CASE WHEN rt.expires_at < CURRENT_TIMESTAMP THEN 1 ELSE 0 END AS is_expired,
+               u.name AS driver_name
+        FROM rating_tokens rt
+        JOIN users u ON u.id = rt.driver_id AND u.role = 'driver'
+        WHERE rt.token = ?
+        """,
+        (token,),
     ).fetchone()
 
-    if not driver:
-        return "Motorista nao encontrado", 404
+    if not token_row:
+        body = """
+        <h1>QR Code invalido</h1>
+        <p class="subtitle-center">Esta etiqueta nao foi encontrada. Solicite uma nova impressao no caixa.</p>
+        """
+        return render_page("QR invalido", body), 404
+
+    if token_row["is_used"]:
+        body = f"""
+        <h1>QR Code ja utilizado</h1>
+        <p class="subtitle-center">
+            A etiqueta do motorista <strong>{esc(token_row['driver_name'])}</strong> ja foi usada em uma avaliacao.
+        </p>
+        <p style="text-align:center;">Se precisar, peca uma nova etiqueta no caixa.</p>
+        """
+        return render_page("QR ja utilizado", body), 410
+
+    if token_row["is_expired"]:
+        body = f"""
+        <h1>QR Code expirado</h1>
+        <p class="subtitle-center">
+            A etiqueta do motorista <strong>{esc(token_row['driver_name'])}</strong> venceu.
+        </p>
+        <p style="text-align:center;">Solicite uma nova etiqueta no caixa.</p>
+        """
+        return render_page("QR expirado", body), 410
+
+    driver = {"id": token_row["driver_id"], "name": token_row["driver_name"]}
 
     msg = ""
     ip = get_client_ip()
@@ -1187,7 +1307,11 @@ def rate_driver(driver_id):
                 db = get_db()
                 db.execute(
                     "INSERT INTO ratings (driver_id, score, comment, ip) VALUES (?, ?, ?, ?)",
-                    (driver_id, score, comment, ip),
+                    (driver["id"], score, comment, ip),
+                )
+                db.execute(
+                    "UPDATE rating_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (token_row["id"],),
                 )
                 db.commit()
 
@@ -1232,10 +1356,10 @@ def rate_driver(driver_id):
     """
     return render_page("Avaliar", body)
 
-
 @app.route("/cashier/print_label")
 @login_required(role="cashier")
 def print_label():
+    cashier = current_user()
     try:
         driver_id = int(request.args.get("driver_id", "0"))
     except ValueError:
@@ -1251,7 +1375,19 @@ def print_label():
     if not driver:
         return redirect(url_for("cashier_dashboard", error="Motorista nao encontrado. Confira a lista cadastrada."))
 
-    rate_url = request.url_root.rstrip("/") + url_for("rate_driver", driver_id=driver["id"])
+    token = uuid.uuid4().hex
+    expires_at = datetime.utcnow() + timedelta(hours=LABEL_TOKEN_EXPIRY_HOURS)
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO rating_tokens (token, driver_id, cashier_id, expires_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (token, driver["id"], cashier["id"] if cashier else None, expires_at),
+    )
+    db.commit()
+
+    rate_url = request.url_root.rstrip("/") + url_for("rate_token", token=token)
     qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=320x320&data={quote(rate_url, safe='')}"
 
     body = f"""
@@ -1360,7 +1496,7 @@ def print_label():
                 <img src="{esc(qr_url)}" alt="QR Code para avaliar a entrega">
             </div>
             <div class="label-footer">
-                Aponte a camera do celular para o QR Code e deixe sua nota.
+                Aponte a camera do celular para o QR Code e deixe sua nota. Este QR Code vale para uma unica avaliacao.
             </div>
         </div>
 
