@@ -696,29 +696,20 @@ def date_filter_sql(column_name, start_date, end_date):
     return clauses, params
 
 
-def get_print_log_rows(limit=200, start_date="", end_date=""):
-    clauses, params = date_filter_sql("rt.created_at", start_date, end_date)
-    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.append(limit)
+def get_cashier_summary_rows():
     return get_db().execute(
         """
-        SELECT rt.id,
-               rt.invoice_number,
-               rt.cashier_id,
-               rt.created_at,
-               rt.used_at,
-               d.name AS driver_name,
-               d.username AS driver_username,
-               c.name AS cashier_name,
-               c.username AS cashier_username
-        FROM rating_tokens rt
-        JOIN users d ON d.id = rt.driver_id
-        LEFT JOIN users c ON c.id = rt.cashier_id
-        {where_sql}
-        ORDER BY rt.created_at DESC, rt.id DESC
-        LIMIT ?
-        """.format(where_sql=where_sql),
-        tuple(params),
+        SELECT c.id,
+               c.name,
+               c.username,
+               COUNT(rt.id) AS total_notas,
+               COALESCE(SUM(CASE WHEN rt.used_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS qrcodes_usados
+        FROM users c
+        LEFT JOIN rating_tokens rt ON rt.cashier_id = c.id
+        WHERE c.role = 'cashier'
+        GROUP BY c.id, c.name, c.username
+        ORDER BY c.name;
+        """
     ).fetchall()
 
 
@@ -780,10 +771,8 @@ def get_driver_comment_rows(driver_id):
 
 
 def render_manager_dashboard():
-    start_date = request.args.get("start_date", "").strip()
-    end_date = request.args.get("end_date", "").strip()
     drivers = get_driver_score_rows()
-    logs = get_print_log_rows(start_date=start_date, end_date=end_date)
+    cashiers = get_cashier_summary_rows()
 
     driver_rows = ""
     for driver in drivers:
@@ -799,32 +788,28 @@ def render_manager_dashboard():
         </tr>
         """
 
-    log_rows = ""
-    for item in logs:
-        used_text = "Usado" if item["used_at"] else "Ainda nao usado"
-        cashier_name = item["cashier_name"] or "Caixa removido"
-        cashier_username = item["cashier_username"] or "-"
-        cashier_cell = f"{esc(cashier_name)}<br><small>{esc(cashier_username)}</small>"
-        if item["cashier_id"]:
-            cashier_cell += f'<br><button class="btn-sm" type="button" onclick="window.location.href=\'/manager/cashier/{item["cashier_id"]}/prints\'">Ver notas impressas</button>'
-        log_rows += f"""
+    cashier_rows = ""
+    for cashier in cashiers:
+        cashier_rows += f"""
         <tr>
-            <td>{esc(format_rating_date(item['created_at']))}</td>
-            <td>{cashier_cell}</td>
-            <td>{esc(item['invoice_number'])}</td>
-            <td>{esc(item['driver_name'])}<br><small>{esc(item['driver_username'])}</small></td>
-            <td>{used_text}</td>
+            <td>{esc(cashier['name'])}</td>
+            <td>{esc(cashier['username'])}</td>
+            <td>{cashier['total_notas']}</td>
+            <td>{cashier['qrcodes_usados']}</td>
+            <td>
+                <button class="btn-sm" type="button" onclick="window.location.href='/manager/cashier/{cashier['id']}/prints'">Ver notas impressas</button>
+            </td>
         </tr>
         """
 
     if not driver_rows:
         driver_rows = '<tr><td colspan="5">Nenhum motorista cadastrado.</td></tr>'
-    if not log_rows:
-        log_rows = '<tr><td colspan="5">Nenhuma etiqueta impressa ainda.</td></tr>'
+    if not cashier_rows:
+        cashier_rows = '<tr><td colspan="5">Nenhuma caixa cadastrada.</td></tr>'
 
     body = f"""
     <h1>Painel do Gestor</h1>
-    <p class="subtitle-center">Consulta de notas dos motoristas e log das impressoes das caixas.</p>
+    <p class="subtitle-center">Consulta de notas dos motoristas e resumo das impressoes das caixas.</p>
 
     <div class="section">
         <div class="section-title">Notas dos motoristas</div>
@@ -845,27 +830,20 @@ def render_manager_dashboard():
     </div>
 
     <div class="section">
-        <div class="section-title">Log de impressoes das caixas</div>
-        <div class="section-subtitle">Mostra caixa, numero da nota fiscal e motorista de cada etiqueta emitida.</div>
-        <form method="get" action="/manager/dashboard" class="section">
-            <label>Data inicial</label>
-            <input type="date" name="start_date" value="{esc(start_date)}">
-            <label>Data final</label>
-            <input type="date" name="end_date" value="{esc(end_date)}">
-            <button type="submit" class="btn-full">Filtrar log</button>
-        </form>
+        <div class="section-title">Log das caixas</div>
+        <div class="section-subtitle">Resumo por caixa cadastrada. Clique para ver as notas impressas e filtrar por data.</div>
         <div class="table-wrapper">
             <table>
                 <thead>
                     <tr>
-                        <th>Data</th>
                         <th>Caixa</th>
-                        <th>Nota fiscal</th>
-                        <th>Motorista</th>
-                        <th>Status do QR</th>
+                        <th>Usuario</th>
+                        <th>Notas impressas</th>
+                        <th>QR codes usados</th>
+                        <th>Detalhes</th>
                     </tr>
                 </thead>
-                <tbody>{log_rows}</tbody>
+                <tbody>{cashier_rows}</tbody>
             </table>
         </div>
     </div>
