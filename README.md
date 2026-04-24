@@ -4,14 +4,17 @@ Aplicacao Flask simples para:
 
 - cadastrar motoristas
 - cadastrar acessos da caixa
+- cadastrar acessos de gestor
 - gerar etiquetas com QR Code na area da caixa
+- registrar numero da nota fiscal em cada impressao
 - permitir que clientes avaliem a entrega
 
 ## Perfis
 
-- `admin`: cadastra logins e senhas de motoristas e caixas
+- `admin`: cadastra logins e senhas de motoristas, caixas e gestores
 - `cashier`: faz login na area da caixa e imprime etiquetas
 - `driver`: faz login no proprio painel e acompanha suas avaliacoes
+- `manager`: visualiza notas dos motoristas e log de impressoes das caixas
 
 ## Rodando localmente
 

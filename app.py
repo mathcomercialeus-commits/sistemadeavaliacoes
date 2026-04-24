@@ -82,7 +82,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             name TEXT NOT NULL,
-            role TEXT NOT NULL CHECK (role IN ('admin', 'cashier', 'driver')),
+            role TEXT NOT NULL CHECK (role IN ('admin', 'cashier', 'driver', 'manager')),
             password_hash TEXT NOT NULL
         );
         """
@@ -109,6 +109,7 @@ def init_db():
             token TEXT UNIQUE NOT NULL,
             driver_id INTEGER NOT NULL,
             cashier_id INTEGER,
+            invoice_number TEXT NOT NULL DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP NOT NULL,
             used_at TIMESTAMP,
@@ -126,8 +127,33 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rating_tokens_driver_id ON rating_tokens(driver_id);")
 
     if USE_POSTGRES:
+        conn.execute(
+            """
+            DO $$
+            DECLARE constraint_name text;
+            BEGIN
+                SELECT conname INTO constraint_name
+                FROM pg_constraint
+                WHERE conrelid = 'users'::regclass
+                  AND contype = 'c'
+                  AND pg_get_constraintdef(oid) LIKE '%role%';
+
+                IF constraint_name IS NOT NULL THEN
+                    EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', constraint_name);
+                END IF;
+            END $$;
+            """
+        )
+        conn.execute(
+            """
+            ALTER TABLE users
+            ADD CONSTRAINT users_role_check
+            CHECK (role IN ('admin', 'cashier', 'driver', 'manager'));
+            """
+        )
         conn.execute("ALTER TABLE ratings ADD COLUMN IF NOT EXISTS ip TEXT;")
         conn.execute("ALTER TABLE ratings ADD COLUMN IF NOT EXISTS comment TEXT;")
+        conn.execute("ALTER TABLE rating_tokens ADD COLUMN IF NOT EXISTS invoice_number TEXT NOT NULL DEFAULT '';")
     else:
         try:
             conn.execute("ALTER TABLE ratings ADD COLUMN ip TEXT;")
@@ -136,6 +162,11 @@ def init_db():
 
         try:
             conn.execute("ALTER TABLE ratings ADD COLUMN comment TEXT;")
+        except DB_OPERATIONAL_ERRORS:
+            pass
+
+        try:
+            conn.execute("ALTER TABLE rating_tokens ADD COLUMN invoice_number TEXT NOT NULL DEFAULT '';")
         except DB_OPERATIONAL_ERRORS:
             pass
 
@@ -182,10 +213,12 @@ def esc(value):
 def format_rating_date(value):
     if not value:
         return "-"
+    if hasattr(value, "strftime"):
+        return value.strftime("%d/%m/%Y %H:%M")
     try:
         dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
         return dt.strftime("%d/%m/%Y %H:%M")
-    except ValueError:
+    except (TypeError, ValueError):
         return value
 
 
@@ -618,8 +651,10 @@ def login_required(role=None):
             user = current_user()
             if not user:
                 return redirect(url_for("index"))
-            if role and user["role"] != role:
-                return "Acesso negado", 403
+            if role:
+                allowed_roles = role if isinstance(role, (tuple, list, set)) else (role,)
+                if user["role"] not in allowed_roles:
+                    return "Acesso negado", 403
             return fn(*args, **kwargs)
 
         return wrapper
@@ -650,6 +685,124 @@ def find_driver_by_lookup(lookup):
     ).fetchall()
 
 
+def get_driver_score_rows():
+    return get_db().execute(
+        """
+        SELECT u.id, u.name, u.username,
+               COUNT(r.id) AS total_avaliacoes,
+               COALESCE(ROUND(AVG(r.score), 2), 0) AS media
+        FROM users u
+        LEFT JOIN ratings r ON u.id = r.driver_id
+        WHERE u.role = 'driver'
+        GROUP BY u.id, u.name, u.username
+        ORDER BY u.name;
+        """
+    ).fetchall()
+
+
+def get_print_log_rows(limit=200):
+    return get_db().execute(
+        """
+        SELECT rt.id,
+               rt.invoice_number,
+               rt.created_at,
+               rt.used_at,
+               d.name AS driver_name,
+               d.username AS driver_username,
+               c.name AS cashier_name,
+               c.username AS cashier_username
+        FROM rating_tokens rt
+        JOIN users d ON d.id = rt.driver_id
+        LEFT JOIN users c ON c.id = rt.cashier_id
+        ORDER BY rt.created_at DESC, rt.id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
+def render_manager_dashboard():
+    drivers = get_driver_score_rows()
+    logs = get_print_log_rows()
+
+    driver_rows = ""
+    for driver in drivers:
+        driver_rows += f"""
+        <tr>
+            <td>{esc(driver['name'])}</td>
+            <td>{esc(driver['username'])}</td>
+            <td>{driver['media']}</td>
+            <td>{driver['total_avaliacoes']}</td>
+        </tr>
+        """
+
+    log_rows = ""
+    for item in logs:
+        used_text = "Usado" if item["used_at"] else "Ainda nao usado"
+        cashier_name = item["cashier_name"] or "Caixa removido"
+        cashier_username = item["cashier_username"] or "-"
+        log_rows += f"""
+        <tr>
+            <td>{esc(format_rating_date(item['created_at']))}</td>
+            <td>{esc(cashier_name)}<br><small>{esc(cashier_username)}</small></td>
+            <td>{esc(item['invoice_number'])}</td>
+            <td>{esc(item['driver_name'])}<br><small>{esc(item['driver_username'])}</small></td>
+            <td>{used_text}</td>
+        </tr>
+        """
+
+    if not driver_rows:
+        driver_rows = '<tr><td colspan="4">Nenhum motorista cadastrado.</td></tr>'
+    if not log_rows:
+        log_rows = '<tr><td colspan="5">Nenhuma etiqueta impressa ainda.</td></tr>'
+
+    body = f"""
+    <h1>Painel do Gestor</h1>
+    <p class="subtitle-center">Consulta de notas dos motoristas e log das impressoes das caixas.</p>
+
+    <div class="section">
+        <div class="section-title">Notas dos motoristas</div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Motorista</th>
+                        <th>Usuario</th>
+                        <th>Media</th>
+                        <th>Avaliacoes</th>
+                    </tr>
+                </thead>
+                <tbody>{driver_rows}</tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Log de impressoes das caixas</div>
+        <div class="section-subtitle">Mostra caixa, numero da nota fiscal e motorista de cada etiqueta emitida.</div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Data</th>
+                        <th>Caixa</th>
+                        <th>Nota fiscal</th>
+                        <th>Motorista</th>
+                        <th>Status do QR</th>
+                    </tr>
+                </thead>
+                <tbody>{log_rows}</tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/logout'">Sair</button>
+    </div>
+    """
+    return render_page("Painel Gestor", body)
+
+
 @app.before_request
 def ensure_db():
     global db_initialized
@@ -666,6 +819,7 @@ def index():
             "admin": "Administrador",
             "cashier": "Caixa",
             "driver": "Motorista",
+            "manager": "Gestor",
         }
         role_text = role_map.get(user["role"], "Usuario")
         buttons = ""
@@ -673,8 +827,10 @@ def index():
             buttons += '<p><button class="btn-full" onclick="window.location.href=\'/admin/dashboard\'">Painel do Administrador</button></p>'
         elif user["role"] == "cashier":
             buttons += '<p><button class="btn-full" onclick="window.location.href=\'/cashier/dashboard\'">Painel da Caixa</button></p>'
-        else:
+        elif user["role"] == "driver":
             buttons += '<p><button class="btn-full" onclick="window.location.href=\'/driver/painel\'">Painel do Motorista</button></p>'
+        else:
+            buttons += '<p><button class="btn-full" onclick="window.location.href=\'/manager/dashboard\'">Painel do Gestor</button></p>'
         buttons += '<p><button class="btn-full btn-outline" onclick="window.location.href=\'/logout\'">Sair</button></p>'
 
         body = f"""
@@ -701,6 +857,9 @@ def index():
         </div>
         <div class="section">
             <button class="btn-full btn-outline" onclick="window.location.href='/driver/login'">Sou Motorista</button>
+        </div>
+        <div class="section">
+            <button class="btn-full btn-outline" onclick="window.location.href='/manager/login'">Sou Gestor</button>
         </div>
         """
 
@@ -806,6 +965,45 @@ def driver_login():
     return render_page("Login Motorista", body)
 
 
+@app.route("/manager/login", methods=["GET", "POST"])
+def manager_login():
+    msg = ""
+    if request.method == "POST":
+        user = authenticate(
+            request.form.get("username", "").strip(),
+            request.form.get("password", ""),
+            "manager",
+        )
+        if user:
+            session["user_id"] = user["id"]
+            return redirect(url_for("manager_dashboard"))
+        msg = "Usuario ou senha invalidos."
+
+    msg_html = f'<div class="erro">{esc(msg)}</div>' if msg else ""
+    body = f"""
+    <h1>Login do Gestor</h1>
+    <p class="subtitle-center">Entre para consultar notas dos motoristas e o log das impressoes.</p>
+    {msg_html}
+    <form method="post" class="section">
+        <label>Usuario</label>
+        <input type="text" name="username">
+        <label>Senha</label>
+        <input type="password" name="password">
+        <button type="submit" class="btn-full">Entrar</button>
+    </form>
+    <div class="section">
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar</button>
+    </div>
+    """
+    return render_page("Login Gestor", body)
+
+
+@app.route("/manager/dashboard")
+@login_required(role="manager")
+def manager_dashboard():
+    return render_manager_dashboard()
+
+
 @app.route("/admin/dashboard")
 @login_required(role="admin")
 def admin_dashboard():
@@ -859,6 +1057,12 @@ def admin_dashboard():
         <div class="section-title">Equipe da caixa</div>
         <div class="section-subtitle">A caixa entra em uma area separada e usa apenas a impressao.</div>
         <button class="btn-full btn-outline" type="button" onclick="window.location.href='/admin/cashiers'">Gerenciar caixas</button>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Gestores</div>
+        <div class="section-subtitle">Gestores acessam apenas notas dos motoristas e log de impressoes.</div>
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/admin/managers'">Gerenciar gestores</button>
     </div>
 
     <div class="section">
@@ -989,6 +1193,84 @@ def admin_cashiers():
     return render_page("Gestao de Caixas", body)
 
 
+@app.route("/admin/managers")
+@login_required(role="admin")
+def admin_managers():
+    managers = get_db().execute(
+        """
+        SELECT id, name, username
+        FROM users
+        WHERE role = 'manager'
+        ORDER BY name;
+        """
+    ).fetchall()
+
+    msg = request.args.get("msg", "").strip()
+    error = request.args.get("error", "").strip()
+    msg_html = f'<div class="msg">{esc(msg)}</div>' if msg else ""
+    error_html = f'<div class="erro">{esc(error)}</div>' if error else ""
+
+    rows = ""
+    for manager in managers:
+        rows += f"""
+        <tr>
+            <td>{esc(manager['name'])}</td>
+            <td>{esc(manager['username'])}</td>
+            <td>
+                <div class="table-actions">
+                    <form method="post" action="/admin/delete_manager/{manager['id']}">
+                        <button class="btn-danger btn-sm" onclick="return confirm('Excluir este gestor?');">Excluir</button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        """
+
+    body = f"""
+    <h1>Gestao de Gestores</h1>
+    <p class="subtitle-center">O gestor acessa somente notas dos motoristas e log de impressoes.</p>
+    {msg_html}
+    {error_html}
+
+    <div class="section">
+        <div class="section-title">Cadastrar gestor</div>
+        <div class="section-subtitle">Esse login nao altera cadastros nem avaliacoes.</div>
+        <form method="post" action="/admin/create_manager">
+            <label>Nome do gestor</label>
+            <input type="text" name="name" required>
+            <label>Usuario para login do gestor</label>
+            <input type="text" name="username" required>
+            <label>Senha para login do gestor</label>
+            <input type="password" name="password" required>
+            <button type="submit">Cadastrar gestor</button>
+        </form>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Gestores cadastrados</div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>Usuario</th>
+                        <th>Acoes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows if rows else '<tr><td colspan="3">Nenhum gestor cadastrado.</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/admin/dashboard'">Voltar para o admin</button>
+    </div>
+    """
+    return render_page("Gestao de Gestores", body)
+
+
 @app.route("/admin/create_driver", methods=["POST"])
 @login_required(role="admin")
 def create_driver():
@@ -1039,6 +1321,31 @@ def create_cashier():
     return redirect(url_for("admin_cashiers", msg="Caixa cadastrado com sucesso."))
 
 
+@app.route("/admin/create_manager", methods=["POST"])
+@login_required(role="admin")
+def create_manager():
+    name = request.form.get("name", "").strip()
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+
+    if not name or not username or not password:
+        return "Dados invalidos", 400
+
+    try:
+        get_db().execute(
+            """
+            INSERT INTO users (username, name, role, password_hash)
+            VALUES (?, ?, 'manager', ?)
+            """,
+            (username, name, generate_password_hash(password)),
+        )
+        get_db().commit()
+    except DB_INTEGRITY_ERRORS:
+        return redirect(url_for("admin_managers", error="Ja existe um usuario com esse login."))
+
+    return redirect(url_for("admin_managers", msg="Gestor cadastrado com sucesso."))
+
+
 @app.route("/admin/reset_ratings/<int:driver_id>", methods=["POST"])
 @login_required(role="admin")
 def reset_ratings(driver_id):
@@ -1074,6 +1381,15 @@ def delete_cashier(cashier_id):
     db.execute("DELETE FROM users WHERE id = ? AND role = 'cashier'", (cashier_id,))
     db.commit()
     return redirect(url_for("admin_cashiers", msg="Caixa removido com sucesso."))
+
+
+@app.route("/admin/delete_manager/<int:manager_id>", methods=["POST"])
+@login_required(role="admin")
+def delete_manager(manager_id):
+    db = get_db()
+    db.execute("DELETE FROM users WHERE id = ? AND role = 'manager'", (manager_id,))
+    db.commit()
+    return redirect(url_for("admin_managers", msg="Gestor removido com sucesso."))
 
 
 @app.route("/cashier/dashboard")
@@ -1117,15 +1433,17 @@ def cashier_dashboard():
     <h1>Painel da Caixa</h1>
     <p class="subtitle-center">
         Login ativo: <strong>{esc(user['name'])}</strong>.
-        Digite o motorista cadastrado e gere a etiqueta.
+        Escolha o motorista, informe a nota fiscal e gere a etiqueta.
     </p>
     {msg_html}
     {error_html}
 
     <div class="section">
         <div class="section-title">Imprimir etiqueta</div>
-        <div class="section-subtitle">Mesmo modo operacional separado do motorista: a caixa entra com login proprio e escolhe o motorista cadastrado para imprimir.</div>
-        <form method="get" action="/cashier/print_label" target="_blank">
+        <div class="section-subtitle">A caixa informa a nota fiscal para registrar o log antes da impressao.</div>
+        <form method="post" action="/cashier/print_label" target="_blank">
+            <label>Numero da nota fiscal</label>
+            <input type="text" name="invoice_number" maxlength="80" required>
             <label>Motorista cadastrado</label>
             {select_html}
             <button type="submit"{submit_attrs}>Gerar etiqueta com QR Code</button>
@@ -1356,17 +1674,22 @@ def rate_token(token):
     """
     return render_page("Avaliar", body)
 
-@app.route("/cashier/print_label")
+@app.route("/cashier/print_label", methods=["GET", "POST"])
 @login_required(role="cashier")
 def print_label():
     cashier = current_user()
     try:
-        driver_id = int(request.args.get("driver_id", "0"))
+        driver_id = int(request.values.get("driver_id", "0"))
     except ValueError:
         driver_id = 0
+    invoice_number = request.values.get("invoice_number", "").strip()
 
     if driver_id <= 0:
         return redirect(url_for("cashier_dashboard", error="Selecione um motorista cadastrado para imprimir a etiqueta."))
+    if not invoice_number:
+        return redirect(url_for("cashier_dashboard", error="Informe o numero da nota fiscal para imprimir a etiqueta."))
+    if len(invoice_number) > 80:
+        invoice_number = invoice_number[:80]
 
     driver = get_db().execute(
         "SELECT * FROM users WHERE id = ? AND role = 'driver'",
@@ -1380,10 +1703,10 @@ def print_label():
     db = get_db()
     db.execute(
         """
-        INSERT INTO rating_tokens (token, driver_id, cashier_id, expires_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO rating_tokens (token, driver_id, cashier_id, invoice_number, expires_at)
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (token, driver["id"], cashier["id"] if cashier else None, expires_at),
+        (token, driver["id"], cashier["id"] if cashier else None, invoice_number, expires_at),
     )
     db.commit()
 
@@ -1492,6 +1815,7 @@ def print_label():
             <div class="label-eyebrow">Etiqueta de avaliacao</div>
             <div class="label-title">Avalie nosso entregador e nossa entrega</div>
             <div class="label-driver">Motorista: <strong>{esc(driver['name'])}</strong></div>
+            <div class="label-driver">Nota fiscal: <strong>{esc(invoice_number)}</strong></div>
             <div class="label-qr">
                 <img src="{esc(qr_url)}" alt="QR Code para avaliar a entrega">
             </div>
