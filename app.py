@@ -24,7 +24,7 @@ USE_POSTGRES = bool(DATABASE_URL)
 DATABASE = os.environ.get("DATABASE_PATH", "avaliacao_entregadores.db")
 DEFAULT_ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "FARMALIMA")
 DEFAULT_ADMIN_NAME = os.environ.get("ADMIN_NAME", "Administrador")
-DEFAULT_ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Farma@lima3535")
+DEFAULT_ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "FarmalimaAvalia3535")
 TRUST_PROXY_HEADERS = os.environ.get("TRUST_PROXY_HEADERS", "1") == "1"
 LABEL_TOKEN_EXPIRY_HOURS = int(os.environ.get("LABEL_TOKEN_EXPIRY_HOURS", "48"))
 
