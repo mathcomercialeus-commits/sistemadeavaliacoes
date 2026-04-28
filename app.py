@@ -1219,9 +1219,6 @@ def admin_dashboard():
             <td>QR unico gerado pela caixa</td>
             <td>
                 <div class="table-actions">
-                    <form method="post" action="/admin/reset_ratings/{driver['id']}">
-                        <button class="btn-warning btn-sm" onclick="return confirm('Zerar as avaliacoes deste motorista?');">Zerar</button>
-                    </form>
                     <form method="post" action="/admin/delete_driver/{driver['id']}">
                         <button class="btn-danger btn-sm" onclick="return confirm('Excluir este motorista e as avaliacoes dele?');">Excluir</button>
                     </form>
@@ -1287,6 +1284,12 @@ def admin_dashboard():
     <div class="section">
         <form method="post" action="/admin/reset_all_ratings">
             <button class="btn-danger btn-full" onclick="return confirm('Zerar todas as avaliacoes do sistema?');">Zerar todas as avaliacoes</button>
+        </form>
+    </div>
+
+    <div class="section">
+        <form method="post" action="/admin/reset_cashier_logs">
+            <button class="btn-warning btn-full" onclick="return confirm('Zerar todos os logs das caixas? Os QR codes ainda nao usados tambem deixarao de funcionar.');">Zerar logs das caixas</button>
         </form>
     </div>
 
@@ -1529,15 +1532,6 @@ def create_manager():
     return redirect(url_for("admin_managers", msg="Gestor cadastrado com sucesso."))
 
 
-@app.route("/admin/reset_ratings/<int:driver_id>", methods=["POST"])
-@login_required(role="admin")
-def reset_ratings(driver_id):
-    db = get_db()
-    db.execute("DELETE FROM ratings WHERE driver_id = ?", (driver_id,))
-    db.commit()
-    return redirect(url_for("admin_dashboard", msg="Avaliacoes do motorista zeradas."))
-
-
 @app.route("/admin/reset_all_ratings", methods=["POST"])
 @login_required(role="admin")
 def reset_all_ratings():
@@ -1545,6 +1539,15 @@ def reset_all_ratings():
     db.execute("DELETE FROM ratings")
     db.commit()
     return redirect(url_for("admin_dashboard", msg="Todas as avaliacoes foram zeradas."))
+
+
+@app.route("/admin/reset_cashier_logs", methods=["POST"])
+@login_required(role="admin")
+def reset_cashier_logs():
+    db = get_db()
+    db.execute("DELETE FROM rating_tokens")
+    db.commit()
+    return redirect(url_for("admin_dashboard", msg="Logs das caixas zerados."))
 
 
 @app.route("/admin/delete_driver/<int:driver_id>", methods=["POST"])
