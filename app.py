@@ -1058,7 +1058,7 @@ def admin_login():
     {msg_html}
     <form method="post" class="section">
         <label>Usuario</label>
-        <input type="text" name="username" value="{esc(DEFAULT_ADMIN_USERNAME)}">
+        <input type="text" name="username" placeholder="Digite seu usuario" required>
         <label>Senha</label>
         <input type="password" name="password">
         <button type="submit" class="btn-full">Entrar</button>
@@ -1247,8 +1247,8 @@ def admin_dashboard():
 
     <div class="section">
         <div class="section-title">Seguranca do administrador</div>
-        <div class="section-subtitle">Troque a senha do administrador sem expor a nova senha no codigo.</div>
-        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/admin/change_password'">Alterar senha do administrador</button>
+        <div class="section-subtitle">Troque o usuario e a senha do administrador sem expor dados no codigo.</div>
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/admin/change_password'">Alterar usuario e senha</button>
     </div>
 
     <div class="section">
@@ -1314,49 +1314,75 @@ def admin_change_password():
     error = ""
 
     if request.method == "POST":
+        new_username = request.form.get("new_username", "").strip()
         current_password = request.form.get("current_password", "")
         new_password = request.form.get("new_password", "")
         confirm_password = request.form.get("confirm_password", "")
+        wants_password_change = bool(new_password or confirm_password)
 
         if not check_password_hash(user["password_hash"], current_password):
             error = "Senha atual incorreta."
-        elif len(new_password) < 6:
+        elif not new_username:
+            error = "Informe o novo usuario do administrador."
+        elif get_db().execute(
+            "SELECT id FROM users WHERE username = ? AND id <> ?",
+            (new_username, user["id"]),
+        ).fetchone():
+            error = "Ja existe outro usuario com esse login."
+        elif wants_password_change and len(new_password) < 6:
             error = "A nova senha precisa ter pelo menos 6 caracteres."
-        elif new_password != confirm_password:
+        elif wants_password_change and new_password != confirm_password:
             error = "A confirmacao da nova senha nao confere."
         else:
-            db = get_db()
-            db.execute(
-                "UPDATE users SET password_hash = ? WHERE id = ? AND role = 'admin'",
-                (generate_password_hash(new_password), user["id"]),
-            )
-            db.commit()
-            msg = "Senha do administrador alterada com sucesso."
+            updates = []
+            params = []
+            if new_username != user["username"]:
+                updates.append("username = ?")
+                params.append(new_username)
+            if wants_password_change:
+                updates.append("password_hash = ?")
+                params.append(generate_password_hash(new_password))
+
+            if not updates:
+                msg = "Nenhuma alteracao foi feita."
+            else:
+                params.append(user["id"])
+                db = get_db()
+                db.execute(
+                    f"UPDATE users SET {', '.join(updates)} WHERE id = ? AND role = 'admin'",
+                    tuple(params),
+                )
+                db.commit()
+                msg = "Usuario e senha do administrador atualizados com sucesso."
+
+    user = current_user()
 
     msg_html = f'<div class="msg">{esc(msg)}</div>' if msg else ""
     error_html = f'<div class="erro">{esc(error)}</div>' if error else ""
 
     body = f"""
-    <h1>Alterar Senha</h1>
-    <p class="subtitle-center">Atualize a senha do administrador logado.</p>
+    <h1>Alterar Usuario e Senha</h1>
+    <p class="subtitle-center">Atualize o login do administrador logado. A nova senha e opcional.</p>
     {msg_html}
     {error_html}
 
     <form method="post" class="section">
+        <label>Novo usuario do administrador</label>
+        <input type="text" name="new_username" value="{esc(user['username'])}" required>
         <label>Senha atual</label>
         <input type="password" name="current_password" required>
         <label>Nova senha</label>
-        <input type="password" name="new_password" minlength="6" required>
+        <input type="password" name="new_password" minlength="6" placeholder="Deixe em branco para manter a senha atual">
         <label>Confirmar nova senha</label>
-        <input type="password" name="confirm_password" minlength="6" required>
-        <button type="submit" class="btn-full">Salvar nova senha</button>
+        <input type="password" name="confirm_password" minlength="6" placeholder="Repita apenas se for trocar a senha">
+        <button type="submit" class="btn-full">Salvar usuario e senha</button>
     </form>
 
     <div class="section">
         <button class="btn-full btn-outline" type="button" onclick="window.location.href='/admin/dashboard'">Voltar para o admin</button>
     </div>
     """
-    return render_page("Alterar Senha Admin", body)
+    return render_page("Alterar Usuario Admin", body)
 
 
 @app.route("/admin/cashiers")
