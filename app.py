@@ -1246,6 +1246,12 @@ def admin_dashboard():
     </div>
 
     <div class="section">
+        <div class="section-title">Seguranca do administrador</div>
+        <div class="section-subtitle">Troque a senha do administrador sem expor a nova senha no codigo.</div>
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/admin/change_password'">Alterar senha do administrador</button>
+    </div>
+
+    <div class="section">
         <div class="section-title">Cadastrar motorista</div>
         <div class="section-subtitle">Crie o login e a senha do motorista.</div>
         <form method="post" action="/admin/create_driver">
@@ -1298,6 +1304,59 @@ def admin_dashboard():
     </div>
     """
     return render_page("Painel Admin", body)
+
+
+@app.route("/admin/change_password", methods=["GET", "POST"])
+@login_required(role="admin")
+def admin_change_password():
+    user = current_user()
+    msg = ""
+    error = ""
+
+    if request.method == "POST":
+        current_password = request.form.get("current_password", "")
+        new_password = request.form.get("new_password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if not check_password_hash(user["password_hash"], current_password):
+            error = "Senha atual incorreta."
+        elif len(new_password) < 6:
+            error = "A nova senha precisa ter pelo menos 6 caracteres."
+        elif new_password != confirm_password:
+            error = "A confirmacao da nova senha nao confere."
+        else:
+            db = get_db()
+            db.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ? AND role = 'admin'",
+                (generate_password_hash(new_password), user["id"]),
+            )
+            db.commit()
+            msg = "Senha do administrador alterada com sucesso."
+
+    msg_html = f'<div class="msg">{esc(msg)}</div>' if msg else ""
+    error_html = f'<div class="erro">{esc(error)}</div>' if error else ""
+
+    body = f"""
+    <h1>Alterar Senha</h1>
+    <p class="subtitle-center">Atualize a senha do administrador logado.</p>
+    {msg_html}
+    {error_html}
+
+    <form method="post" class="section">
+        <label>Senha atual</label>
+        <input type="password" name="current_password" required>
+        <label>Nova senha</label>
+        <input type="password" name="new_password" minlength="6" required>
+        <label>Confirmar nova senha</label>
+        <input type="password" name="confirm_password" minlength="6" required>
+        <button type="submit" class="btn-full">Salvar nova senha</button>
+    </form>
+
+    <div class="section">
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/admin/dashboard'">Voltar para o admin</button>
+    </div>
+    """
+    return render_page("Alterar Senha Admin", body)
 
 
 @app.route("/admin/cashiers")
