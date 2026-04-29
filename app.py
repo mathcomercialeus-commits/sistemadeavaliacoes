@@ -1345,7 +1345,7 @@ def admin_dashboard():
     </div>
 
     <div class="section">
-        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar ao inicio</button>
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/logout'">Sair</button>
     </div>
     """
     return render_page("Painel Admin", body)
