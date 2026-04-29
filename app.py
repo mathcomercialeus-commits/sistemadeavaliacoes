@@ -219,6 +219,9 @@ def render_page(title, body_html):
             --accent: #a8e72e;
             --accent-strong: #72c414;
             --accent-soft: #effbdc;
+            --primary: #2563eb;
+            --primary-strong: #1d4ed8;
+            --primary-soft: #eff6ff;
             --ink: #111827;
             --ink-soft: #334155;
             --muted: #64748b;
@@ -247,9 +250,9 @@ def render_page(title, body_html):
             font-family: "Aptos", "Segoe UI Variable", "Trebuchet MS", sans-serif;
             color: var(--ink);
             background:
-                radial-gradient(circle at top left, rgba(168, 231, 46, 0.12), transparent 28rem),
-                radial-gradient(circle at bottom right, rgba(15, 23, 42, 0.06), transparent 30rem),
-                linear-gradient(135deg, #f8fafc 0%, #eef2f7 48%, #ffffff 100%);
+                radial-gradient(circle at top left, rgba(37, 99, 235, 0.08), transparent 28rem),
+                radial-gradient(circle at bottom right, rgba(15, 23, 42, 0.05), transparent 30rem),
+                linear-gradient(135deg, #f8fafc 0%, #f1f5f9 48%, #ffffff 100%);
             background-attachment: fixed;
         }}
 
@@ -372,11 +375,11 @@ def render_page(title, body_html):
 
         .section {{
             margin-bottom: 22px;
-            padding: 18px;
+            padding: 20px;
             border-radius: 24px;
-            background: rgba(255, 255, 255, 0.82);
+            background: rgba(255, 255, 255, 0.92);
             border: 1px solid var(--line);
-            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.045);
+            box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
         }}
 
         .section-title {{
@@ -442,17 +445,17 @@ def render_page(title, body_html):
             padding: 12px 16px;
             font-size: 0.95rem;
             font-weight: 900;
-            color: #111827;
+            color: white;
             cursor: pointer;
-            background: linear-gradient(135deg, #111827, #273449);
-            box-shadow: 0 13px 26px rgba(15, 23, 42, 0.18);
+            background: linear-gradient(135deg, var(--primary), var(--primary-strong));
+            box-shadow: 0 13px 26px rgba(37, 99, 235, 0.20);
             transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
         }}
 
         button:hover {{
             filter: saturate(1.08);
             transform: translateY(-2px);
-            box-shadow: 0 16px 32px rgba(15, 23, 42, 0.20);
+            box-shadow: 0 16px 32px rgba(37, 99, 235, 0.24);
         }}
 
         button:active {{
@@ -467,9 +470,9 @@ def render_page(title, body_html):
         }}
 
         .btn-full:not(.btn-outline):not(.btn-danger):not(.btn-warning) {{
-            color: #111827;
-            background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-            box-shadow: 0 14px 28px rgba(114, 196, 20, 0.22);
+            color: white;
+            background: linear-gradient(135deg, var(--primary), var(--primary-strong));
+            box-shadow: 0 14px 28px rgba(37, 99, 235, 0.20);
         }}
 
         .btn-danger {{
@@ -487,9 +490,20 @@ def render_page(title, body_html):
         }}
 
         .btn-sm {{
-            padding: 7px 12px;
+            padding: 8px 14px;
             font-size: 0.82rem;
-            box-shadow: none;
+            color: white;
+            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.16);
+        }}
+
+        button:disabled,
+        button[disabled] {{
+            color: #94a3b8 !important;
+            cursor: not-allowed;
+            background: #e2e8f0 !important;
+            box-shadow: none !important;
+            transform: none !important;
+            filter: none !important;
         }}
 
         .msg,
@@ -526,17 +540,17 @@ def render_page(title, body_html):
 
         th {{
             text-align: left;
-            padding: 8px 10px;
+            padding: 10px 12px;
             color: var(--ink-soft);
-            background: var(--surface-muted);
+            background: #f8fafc;
             font-size: 0.78rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
         }}
 
         td {{
-            padding: 12px 10px;
-            background: rgba(255, 255, 255, 0.94);
+            padding: 13px 12px;
+            background: #ffffff;
             border-top: 1px solid var(--line);
             border-bottom: 1px solid var(--line);
         }}
