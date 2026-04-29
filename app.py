@@ -656,6 +656,28 @@ def authenticate(username, password, role):
     return None
 
 
+def authenticate_any_role(username, password):
+    user = get_db().execute(
+        "SELECT * FROM users WHERE username = ?",
+        (username,),
+    ).fetchone()
+    if user and check_password_hash(user["password_hash"], password):
+        return user
+    return None
+
+
+def dashboard_url_for_role(role):
+    if role == "admin":
+        return url_for("admin_dashboard")
+    if role == "cashier":
+        return url_for("cashier_dashboard")
+    if role == "driver":
+        return url_for("driver_panel")
+    if role == "manager":
+        return url_for("manager_dashboard")
+    return url_for("index")
+
+
 def find_driver_by_lookup(lookup):
     return get_db().execute(
         """
@@ -993,15 +1015,8 @@ def index():
             "manager": "Gestor",
         }
         role_text = role_map.get(user["role"], "Usuario")
-        buttons = ""
-        if user["role"] == "admin":
-            buttons += '<p><button class="btn-full" onclick="window.location.href=\'/admin/dashboard\'">Painel do Administrador</button></p>'
-        elif user["role"] == "cashier":
-            buttons += '<p><button class="btn-full" onclick="window.location.href=\'/cashier/dashboard\'">Painel da Caixa</button></p>'
-        elif user["role"] == "driver":
-            buttons += '<p><button class="btn-full" onclick="window.location.href=\'/driver/painel\'">Painel do Motorista</button></p>'
-        else:
-            buttons += '<p><button class="btn-full" onclick="window.location.href=\'/manager/dashboard\'">Painel do Gestor</button></p>'
+        dashboard_url = dashboard_url_for_role(user["role"])
+        buttons = f'<p><button class="btn-full" onclick="window.location.href=\'{dashboard_url}\'">Acessar meu painel</button></p>'
         buttons += '<p><button class="btn-full btn-outline" onclick="window.location.href=\'/logout\'">Sair</button></p>'
 
         body = f"""
@@ -1016,157 +1031,60 @@ def index():
         body = """
         <h1>Avaliacao de Entregas</h1>
         <p class="subtitle-center">
-            Administrador cadastra os acessos.
-            Caixa imprime as etiquetas.
-            Motorista compartilha o QR Code.
+            Entre com seu usuario e senha. O sistema identifica automaticamente seu perfil.
         </p>
         <div class="section">
-            <button class="btn-full" onclick="window.location.href='/admin/login'">Sou Administrador</button>
-        </div>
-        <div class="section">
-            <button class="btn-full btn-outline" onclick="window.location.href='/cashier/login'">Sou Caixa</button>
-        </div>
-        <div class="section">
-            <button class="btn-full btn-outline" onclick="window.location.href='/driver/login'">Sou Motorista</button>
-        </div>
-        <div class="section">
-            <button class="btn-full btn-outline" onclick="window.location.href='/manager/login'">Sou Gestor</button>
+            <button class="btn-full" onclick="window.location.href='/login'">Entrar no sistema</button>
         </div>
         """
 
     return render_page("Inicio", body)
 
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    user = current_user()
+    if user:
+        return redirect(dashboard_url_for_role(user["role"]))
+
+    msg = ""
+    if request.method == "POST":
+        user = authenticate_any_role(
+            request.form.get("username", "").strip(),
+            request.form.get("password", ""),
+        )
+        if user:
+            session["user_id"] = user["id"]
+            return redirect(dashboard_url_for_role(user["role"]))
+        msg = "Usuario ou senha invalidos."
+
+    msg_html = f'<div class="erro">{esc(msg)}</div>' if msg else ""
+    body = f"""
+    <h1>Entrar no Sistema</h1>
+    <p class="subtitle-center">Use seu usuario e senha. O sistema abre automaticamente o painel do seu perfil.</p>
+    {msg_html}
+    <form method="post" class="section">
+        <label>Usuario</label>
+        <input type="text" name="username" placeholder="Digite seu usuario" required autofocus>
+        <label>Senha</label>
+        <input type="password" name="password" required>
+        <button type="submit" class="btn-full">Entrar</button>
+    </form>
+    <div class="section">
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar</button>
+    </div>
+    """
+    return render_page("Login", body)
+
+
 @app.route("/admin/login", methods=["GET", "POST"])
-def admin_login():
-    msg = ""
-    if request.method == "POST":
-        user = authenticate(
-            request.form.get("username", "").strip(),
-            request.form.get("password", ""),
-            "admin",
-        )
-        if user:
-            session["user_id"] = user["id"]
-            return redirect(url_for("admin_dashboard"))
-        msg = "Usuario ou senha invalidos."
-
-    msg_html = f'<div class="erro">{esc(msg)}</div>' if msg else ""
-    body = f"""
-    <h1>Login do Administrador</h1>
-    <p class="subtitle-center">Cadastre motoristas e caixas a partir desta area.</p>
-    {msg_html}
-    <form method="post" class="section">
-        <label>Usuario</label>
-        <input type="text" name="username" placeholder="Digite seu usuario" required>
-        <label>Senha</label>
-        <input type="password" name="password">
-        <button type="submit" class="btn-full">Entrar</button>
-    </form>
-    <div class="section">
-        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar</button>
-    </div>
-    """
-    return render_page("Login Admin", body)
-
-
 @app.route("/cashier/login", methods=["GET", "POST"])
-def cashier_login():
-    msg = ""
-    if request.method == "POST":
-        user = authenticate(
-            request.form.get("username", "").strip(),
-            request.form.get("password", ""),
-            "cashier",
-        )
-        if user:
-            session["user_id"] = user["id"]
-            return redirect(url_for("cashier_dashboard"))
-        msg = "Usuario ou senha invalidos."
-
-    msg_html = f'<div class="erro">{esc(msg)}</div>' if msg else ""
-    body = f"""
-    <h1>Login da Caixa</h1>
-    <p class="subtitle-center">Entre para gerar e imprimir as etiquetas de avaliacao.</p>
-    {msg_html}
-    <form method="post" class="section">
-        <label>Usuario</label>
-        <input type="text" name="username">
-        <label>Senha</label>
-        <input type="password" name="password">
-        <button type="submit" class="btn-full">Entrar</button>
-    </form>
-    <div class="section">
-        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar</button>
-    </div>
-    """
-    return render_page("Login Caixa", body)
-
-
 @app.route("/driver/login", methods=["GET", "POST"])
-def driver_login():
-    msg = ""
-    if request.method == "POST":
-        user = authenticate(
-            request.form.get("username", "").strip(),
-            request.form.get("password", ""),
-            "driver",
-        )
-        if user:
-            session["user_id"] = user["id"]
-            return redirect(url_for("driver_panel"))
-        msg = "Usuario ou senha invalidos."
-
-    msg_html = f'<div class="erro">{esc(msg)}</div>' if msg else ""
-    body = f"""
-    <h1>Login do Motorista</h1>
-    <p class="subtitle-center">Entre para visualizar o QR Code do seu link de avaliacao.</p>
-    {msg_html}
-    <form method="post" class="section">
-        <label>Usuario</label>
-        <input type="text" name="username">
-        <label>Senha</label>
-        <input type="password" name="password">
-        <button type="submit" class="btn-full">Entrar</button>
-    </form>
-    <div class="section">
-        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar</button>
-    </div>
-    """
-    return render_page("Login Motorista", body)
-
-
 @app.route("/manager/login", methods=["GET", "POST"])
-def manager_login():
-    msg = ""
+def legacy_login_redirect():
     if request.method == "POST":
-        user = authenticate(
-            request.form.get("username", "").strip(),
-            request.form.get("password", ""),
-            "manager",
-        )
-        if user:
-            session["user_id"] = user["id"]
-            return redirect(url_for("manager_dashboard"))
-        msg = "Usuario ou senha invalidos."
-
-    msg_html = f'<div class="erro">{esc(msg)}</div>' if msg else ""
-    body = f"""
-    <h1>Login do Gestor</h1>
-    <p class="subtitle-center">Entre para consultar notas dos motoristas e o log das impressoes.</p>
-    {msg_html}
-    <form method="post" class="section">
-        <label>Usuario</label>
-        <input type="text" name="username">
-        <label>Senha</label>
-        <input type="password" name="password">
-        <button type="submit" class="btn-full">Entrar</button>
-    </form>
-    <div class="section">
-        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar</button>
-    </div>
-    """
-    return render_page("Login Gestor", body)
+        return login()
+    return redirect(url_for("login"))
 
 
 @app.route("/manager/dashboard")
