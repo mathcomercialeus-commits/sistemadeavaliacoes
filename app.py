@@ -211,33 +211,45 @@ def render_page(title, body_html):
 <html lang="pt-BR">
 <head>
     <meta charset="utf-8">
-    <title>{esc(title)} | Avaliacao de Entregas</title>
+    <title>{esc(title)} | LemonRate</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="/static/lemonrate.ico">
     <style>
         :root {{
-            --brand-1: #00bcd4;
-            --brand-2: #008ba3;
-            --bg-1: #e0f7fa;
-            --text-main: #173042;
-            --text-muted: #607d8b;
-            --card-bg: #ffffff;
+            --lime: #b7f233;
+            --lime-strong: #8fd414;
+            --mint: #e9ffd0;
+            --ink: #172116;
+            --ink-soft: #41513d;
+            --muted: #6f7b6a;
+            --surface: #ffffff;
+            --surface-soft: #f6faef;
+            --line: #dde8d1;
+            --shadow: 0 24px 70px rgba(23, 33, 22, 0.18);
             --danger-1: #ef5350;
-            --danger-2: #d32f2f;
-            --warning-1: #ffb300;
-            --warning-2: #f57c00;
-            --line: #e6edf1;
+            --danger-2: #c62828;
+            --warning-1: #f6c453;
+            --warning-2: #d98612;
         }}
 
         * {{
             box-sizing: border-box;
         }}
 
+        html {{
+            scroll-behavior: smooth;
+        }}
+
         body {{
             margin: 0;
             min-height: 100vh;
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-            color: var(--text-main);
-            background: linear-gradient(145deg, var(--bg-1), var(--brand-1));
+            font-family: "Aptos", "Segoe UI Variable", "Trebuchet MS", sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top left, rgba(183, 242, 51, 0.42), transparent 32rem),
+                radial-gradient(circle at bottom right, rgba(143, 212, 20, 0.30), transparent 30rem),
+                linear-gradient(135deg, #f7fbe9 0%, #dff3c3 48%, #f9fbf4 100%);
+            background-attachment: fixed;
         }}
 
         .topbar {{
@@ -245,46 +257,103 @@ def render_page(title, body_html):
             top: 0;
             z-index: 10;
             display: flex;
-            justify-content: center;
+            justify-content: space-between;
             align-items: center;
-            min-height: 56px;
-            padding: 12px 16px;
-            background: linear-gradient(135deg, var(--brand-1), var(--brand-2));
-            color: white;
-            font-weight: 700;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+            min-height: 72px;
+            padding: 14px clamp(16px, 5vw, 54px);
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.76);
+            border-bottom: 1px solid rgba(221, 232, 209, 0.78);
+            box-shadow: 0 12px 35px rgba(23, 33, 22, 0.08);
+            backdrop-filter: blur(18px);
+        }}
+
+        .brand {{
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            font-weight: 900;
+            letter-spacing: -0.035em;
+            font-size: 1.2rem;
+        }}
+
+        .brand-logo {{
+            width: 42px;
+            height: 42px;
+            object-fit: contain;
+            border-radius: 14px;
+            padding: 4px;
+            background: linear-gradient(145deg, white, var(--mint));
+            box-shadow: 0 10px 24px rgba(143, 212, 20, 0.28);
+        }}
+
+        .brand-tag {{
+            display: none;
+            color: var(--muted);
+            font-size: 0.84rem;
+            font-weight: 800;
+            letter-spacing: 0.02em;
         }}
 
         .page {{
             display: flex;
             justify-content: center;
-            padding: 18px 12px 32px;
+            padding: clamp(18px, 4vw, 42px) 12px 44px;
         }}
 
         .card {{
             width: 100%;
-            max-width: 940px;
-            background: var(--card-bg);
-            border-radius: 22px;
-            padding: 24px 18px 28px;
-            box-shadow: 0 18px 45px rgba(0, 0, 0, 0.14);
+            max-width: 1080px;
+            position: relative;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.88);
+            border: 1px solid rgba(255, 255, 255, 0.78);
+            border-radius: 30px;
+            padding: 28px 18px 30px;
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(14px);
+            animation: card-in 0.38s ease both;
+        }}
+
+        .card::before {{
+            content: "";
+            position: absolute;
+            inset: 0 0 auto;
+            height: 8px;
+            background: linear-gradient(90deg, var(--lime), var(--lime-strong), #24351e);
+        }}
+
+        @keyframes card-in {{
+            from {{
+                opacity: 0;
+                transform: translateY(10px) scale(0.99);
+            }}
+            to {{
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }}
         }}
 
         @media (min-width: 768px) {{
+            .brand-tag {{
+                display: inline-block;
+            }}
+
             .card {{
-                padding: 34px 32px 36px;
+                padding: 42px 42px 44px;
             }}
         }}
 
         h1, h2, h3 {{
             margin-top: 0;
             text-align: center;
+            letter-spacing: -0.045em;
         }}
 
         h1 {{
-            margin-bottom: 8px;
+            margin-bottom: 10px;
+            font-size: clamp(2rem, 5vw, 3.35rem);
+            line-height: 0.98;
         }}
 
         p {{
@@ -293,24 +362,32 @@ def render_page(title, body_html):
 
         .subtitle-center {{
             text-align: center;
-            color: var(--text-muted);
-            margin-bottom: 18px;
+            color: var(--muted);
+            max-width: 660px;
+            margin: 0 auto 22px;
+            line-height: 1.55;
         }}
 
         .section {{
-            margin-bottom: 20px;
+            margin-bottom: 22px;
+            padding: 18px;
+            border-radius: 22px;
+            background: rgba(246, 250, 239, 0.72);
+            border: 1px solid rgba(221, 232, 209, 0.72);
         }}
 
         .section-title {{
-            margin-bottom: 6px;
-            font-size: 1rem;
-            font-weight: 700;
+            margin-bottom: 7px;
+            font-size: 1.04rem;
+            font-weight: 900;
+            letter-spacing: -0.02em;
         }}
 
         .section-subtitle {{
-            margin-bottom: 10px;
+            margin-bottom: 12px;
             font-size: 0.92rem;
-            color: var(--text-muted);
+            color: var(--muted);
+            line-height: 1.45;
         }}
 
         form {{
@@ -321,29 +398,34 @@ def render_page(title, body_html):
 
         label {{
             font-size: 0.92rem;
-            color: var(--text-muted);
-            font-weight: 600;
+            color: var(--ink-soft);
+            font-weight: 800;
         }}
 
         input[type=text],
         input[type=password],
+        input[type=date],
         select,
         textarea {{
             width: 100%;
-            padding: 11px 12px;
-            border: 1px solid #d2dbe0;
-            border-radius: 12px;
+            padding: 13px 14px;
+            border: 1px solid #cddbc0;
+            border-radius: 15px;
             font-size: 0.96rem;
             outline: none;
-            background: white;
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.94);
+            transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
         }}
 
         input[type=text]:focus,
         input[type=password]:focus,
+        input[type=date]:focus,
         select:focus,
         textarea:focus {{
-            border-color: var(--brand-1);
-            box-shadow: 0 0 0 3px rgba(0, 188, 212, 0.15);
+            border-color: var(--lime-strong);
+            box-shadow: 0 0 0 4px rgba(183, 242, 51, 0.22);
+            transform: translateY(-1px);
         }}
 
         textarea {{
@@ -354,33 +436,41 @@ def render_page(title, body_html):
         button {{
             border: none;
             border-radius: 999px;
-            padding: 11px 14px;
+            padding: 12px 16px;
             font-size: 0.95rem;
-            font-weight: 700;
-            color: white;
+            font-weight: 900;
+            color: #14210f;
             cursor: pointer;
-            background: linear-gradient(135deg, var(--brand-1), var(--brand-2));
-            box-shadow: 0 10px 22px rgba(0, 0, 0, 0.12);
+            background: linear-gradient(135deg, var(--lime), var(--lime-strong));
+            box-shadow: 0 13px 26px rgba(143, 212, 20, 0.28);
+            transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
         }}
 
         button:hover {{
-            filter: brightness(1.03);
-            transform: translateY(-1px);
+            filter: saturate(1.08);
+            transform: translateY(-2px);
+            box-shadow: 0 16px 32px rgba(143, 212, 20, 0.34);
+        }}
+
+        button:active {{
+            transform: translateY(0);
         }}
 
         .btn-outline {{
-            background: white;
-            color: var(--brand-2);
-            border: 1px solid rgba(0, 139, 163, 0.24);
+            background: rgba(255, 255, 255, 0.88);
+            color: var(--ink);
+            border: 1px solid rgba(65, 81, 61, 0.20);
             box-shadow: none;
         }}
 
         .btn-danger {{
             background: linear-gradient(135deg, var(--danger-1), var(--danger-2));
+            color: white;
         }}
 
         .btn-warning {{
             background: linear-gradient(135deg, var(--warning-1), var(--warning-2));
+            color: #2d2107;
         }}
 
         .btn-full {{
@@ -395,15 +485,16 @@ def render_page(title, body_html):
 
         .msg,
         .erro {{
-            border-radius: 12px;
-            padding: 11px 12px;
-            margin-bottom: 14px;
+            border-radius: 16px;
+            padding: 13px 14px;
+            margin-bottom: 16px;
             font-size: 0.92rem;
+            font-weight: 700;
         }}
 
         .msg {{
-            background: #eaf7ff;
-            border: 1px solid #b6dcff;
+            background: #eefbdc;
+            border: 1px solid #b9e889;
         }}
 
         .erro {{
@@ -414,6 +505,7 @@ def render_page(title, body_html):
         .table-wrapper {{
             overflow-x: auto;
             margin-top: 12px;
+            border-radius: 18px;
         }}
 
         table {{
@@ -426,13 +518,16 @@ def render_page(title, body_html):
         th {{
             text-align: left;
             padding: 8px 10px;
-            color: var(--text-muted);
-            background: rgba(23, 48, 66, 0.05);
+            color: var(--ink-soft);
+            background: rgba(183, 242, 51, 0.18);
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }}
 
         td {{
-            padding: 10px;
-            background: white;
+            padding: 12px 10px;
+            background: rgba(255, 255, 255, 0.94);
             border-top: 1px solid var(--line);
             border-bottom: 1px solid var(--line);
         }}
@@ -455,7 +550,7 @@ def render_page(title, body_html):
             overflow-wrap: break-word;
             padding: 4px 6px;
             border-radius: 8px;
-            background: #f3f8fb;
+            background: #eef7df;
             font-size: 0.8rem;
         }}
 
@@ -471,10 +566,13 @@ def render_page(title, body_html):
             align-items: center;
             gap: 8px;
             margin: 14px 0 10px;
+            padding: 16px;
+            border-radius: 20px;
+            background: linear-gradient(180deg, rgba(183, 242, 51, 0.13), rgba(255, 255, 255, 0.82));
         }}
 
         .rating-label {{
-            color: var(--text-muted);
+            color: var(--muted);
             font-size: 0.92rem;
         }}
 
@@ -490,25 +588,25 @@ def render_page(title, body_html):
         }}
 
         .stars label {{
-            font-size: 34px;
-            color: #cfd8dc;
+            font-size: 38px;
+            color: #d8e1d1;
             cursor: pointer;
             transition: color 0.12s ease, transform 0.12s ease;
         }}
 
         .stars label:hover,
         .stars label:hover ~ label {{
-            color: #ffd54f;
+            color: #d7ff44;
             transform: translateY(-1px);
         }}
 
         .stars input:checked ~ label {{
-            color: #ffc107;
+            color: var(--lime-strong);
         }}
 
         .rating-text {{
             min-height: 18px;
-            color: var(--text-muted);
+            color: var(--muted);
             font-size: 0.88rem;
         }}
 
@@ -520,14 +618,15 @@ def render_page(title, body_html):
         }}
 
         .stat-card {{
-            padding: 16px;
-            border-radius: 16px;
-            background: linear-gradient(180deg, rgba(0, 188, 212, 0.10), rgba(224, 247, 250, 0.65));
-            border: 1px solid rgba(0, 139, 163, 0.16);
+            padding: 18px;
+            border-radius: 20px;
+            background: linear-gradient(145deg, rgba(183, 242, 51, 0.22), rgba(255, 255, 255, 0.88));
+            border: 1px solid rgba(143, 212, 20, 0.22);
+            box-shadow: 0 12px 28px rgba(23, 33, 22, 0.06);
         }}
 
         .stat-label {{
-            color: var(--text-muted);
+            color: var(--muted);
             font-size: 0.86rem;
             margin-bottom: 6px;
         }}
@@ -544,10 +643,10 @@ def render_page(title, body_html):
         }}
 
         .review-card {{
-            padding: 16px;
-            border-radius: 16px;
+            padding: 18px;
+            border-radius: 20px;
             border: 1px solid var(--line);
-            background: #fbfdfe;
+            background: rgba(255, 255, 255, 0.86);
         }}
 
         .review-top {{
@@ -563,7 +662,7 @@ def render_page(title, body_html):
         }}
 
         .review-date {{
-            color: var(--text-muted);
+            color: var(--muted);
             font-size: 0.86rem;
         }}
 
@@ -573,8 +672,27 @@ def render_page(title, body_html):
         }}
 
         .review-empty {{
-            color: var(--text-muted);
+            color: var(--muted);
             font-style: italic;
+        }}
+
+        @media (max-width: 640px) {{
+            .topbar {{
+                min-height: 64px;
+            }}
+
+            .brand-logo {{
+                width: 36px;
+                height: 36px;
+            }}
+
+            .card {{
+                border-radius: 24px;
+            }}
+
+            .section {{
+                padding: 15px;
+            }}
         }}
     </style>
     <script>
@@ -602,7 +720,13 @@ def render_page(title, body_html):
     </script>
 </head>
 <body>
-    <header class="topbar">Avaliacao de Entregas</header>
+    <header class="topbar">
+        <div class="brand">
+            <img class="brand-logo" src="/static/lemonrate.png" alt="LemonRate">
+            <span>LemonRate</span>
+        </div>
+        <div class="brand-tag">Avaliacoes de entrega</div>
+    </header>
     <main class="page">
         <div class="card">
             {body_html}
@@ -1021,7 +1145,7 @@ def index():
 
         body = f"""
         <h1>Bem-vindo</h1>
-        <p class="subtitle-center">Controle profissional de avaliacao de entregas.</p>
+        <p class="subtitle-center">LemonRate organiza avaliacoes, comentarios e etiquetas QR em um painel simples e profissional.</p>
         <p style="text-align:center; margin-bottom: 18px;">
             Logado como: <strong>{esc(user['name'])} ({esc(role_text)})</strong>
         </p>
@@ -1029,9 +1153,9 @@ def index():
         """
     else:
         body = """
-        <h1>Avaliacao de Entregas</h1>
+        <h1>LemonRate</h1>
         <p class="subtitle-center">
-            Entre com seu usuario e senha. O sistema identifica automaticamente seu perfil.
+            Avaliacoes de entrega com controle de QR, motoristas, caixas e gestores em um unico lugar.
         </p>
         <div class="section">
             <button class="btn-full" onclick="window.location.href='/login'">Entrar no sistema</button>
@@ -1916,17 +2040,17 @@ def print_label():
         .label-card {{
             width: 100%;
             max-width: 420px;
-            padding: 18px;
+            padding: 20px;
             text-align: center;
-            border-radius: 18px;
-            background: white;
-            border: 2px dashed rgba(23, 48, 66, 0.18);
-            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.10);
+            border-radius: 24px;
+            background: linear-gradient(180deg, #ffffff, #f6faef);
+            border: 2px dashed rgba(143, 212, 20, 0.42);
+            box-shadow: 0 16px 38px rgba(23, 33, 22, 0.12);
         }}
 
         .label-eyebrow {{
             margin-bottom: 8px;
-            color: #008ba3;
+            color: #648f0d;
             font-size: 0.78rem;
             font-weight: 800;
             letter-spacing: 0.08em;
@@ -1936,8 +2060,9 @@ def print_label():
         .label-title {{
             margin-bottom: 8px;
             font-size: 1.35rem;
-            font-weight: 800;
+            font-weight: 900;
             line-height: 1.2;
+            color: #172116;
         }}
 
         .label-driver {{
@@ -1949,11 +2074,15 @@ def print_label():
             width: 220px;
             height: 220px;
             object-fit: contain;
+            padding: 10px;
+            border-radius: 22px;
+            background: white;
+            border: 1px solid #dde8d1;
         }}
 
         .label-footer {{
             margin-top: 12px;
-            color: #526674;
+            color: #6f7b6a;
             font-size: 0.92rem;
         }}
 
@@ -1988,6 +2117,10 @@ def print_label():
                 padding: 0 !important;
                 border-radius: 0 !important;
                 box-shadow: none !important;
+            }}
+
+            .card::before {{
+                display: none !important;
             }}
 
             .label-card {{
