@@ -216,16 +216,17 @@ def render_page(title, body_html):
     <link rel="icon" href="/static/lemonrate.ico">
     <style>
         :root {{
-            --lime: #b7f233;
-            --lime-strong: #8fd414;
-            --mint: #e9ffd0;
-            --ink: #172116;
-            --ink-soft: #41513d;
-            --muted: #6f7b6a;
+            --accent: #a8e72e;
+            --accent-strong: #72c414;
+            --accent-soft: #effbdc;
+            --ink: #111827;
+            --ink-soft: #334155;
+            --muted: #64748b;
             --surface: #ffffff;
-            --surface-soft: #f6faef;
-            --line: #dde8d1;
-            --shadow: 0 24px 70px rgba(23, 33, 22, 0.18);
+            --surface-soft: #f8fafc;
+            --surface-muted: #f1f5f9;
+            --line: #e2e8f0;
+            --shadow: 0 28px 80px rgba(15, 23, 42, 0.12);
             --danger-1: #ef5350;
             --danger-2: #c62828;
             --warning-1: #f6c453;
@@ -246,9 +247,9 @@ def render_page(title, body_html):
             font-family: "Aptos", "Segoe UI Variable", "Trebuchet MS", sans-serif;
             color: var(--ink);
             background:
-                radial-gradient(circle at top left, rgba(183, 242, 51, 0.42), transparent 32rem),
-                radial-gradient(circle at bottom right, rgba(143, 212, 20, 0.30), transparent 30rem),
-                linear-gradient(135deg, #f7fbe9 0%, #dff3c3 48%, #f9fbf4 100%);
+                radial-gradient(circle at top left, rgba(168, 231, 46, 0.12), transparent 28rem),
+                radial-gradient(circle at bottom right, rgba(15, 23, 42, 0.06), transparent 30rem),
+                linear-gradient(135deg, #f8fafc 0%, #eef2f7 48%, #ffffff 100%);
             background-attachment: fixed;
         }}
 
@@ -262,9 +263,9 @@ def render_page(title, body_html):
             min-height: 72px;
             padding: 14px clamp(16px, 5vw, 54px);
             color: var(--ink);
-            background: rgba(255, 255, 255, 0.76);
-            border-bottom: 1px solid rgba(221, 232, 209, 0.78);
-            box-shadow: 0 12px 35px rgba(23, 33, 22, 0.08);
+            background: rgba(255, 255, 255, 0.86);
+            border-bottom: 1px solid rgba(226, 232, 240, 0.88);
+            box-shadow: 0 12px 35px rgba(15, 23, 42, 0.06);
             backdrop-filter: blur(18px);
         }}
 
@@ -283,8 +284,9 @@ def render_page(title, body_html):
             object-fit: contain;
             border-radius: 14px;
             padding: 4px;
-            background: linear-gradient(145deg, white, var(--mint));
-            box-shadow: 0 10px 24px rgba(143, 212, 20, 0.28);
+            background: white;
+            border: 1px solid rgba(168, 231, 46, 0.55);
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.10);
         }}
 
         .brand-tag {{
@@ -306,12 +308,12 @@ def render_page(title, body_html):
             max-width: 1080px;
             position: relative;
             overflow: hidden;
-            background: rgba(255, 255, 255, 0.88);
-            border: 1px solid rgba(255, 255, 255, 0.78);
-            border-radius: 30px;
+            background: rgba(255, 255, 255, 0.94);
+            border: 1px solid rgba(226, 232, 240, 0.94);
+            border-radius: 34px;
             padding: 28px 18px 30px;
             box-shadow: var(--shadow);
-            backdrop-filter: blur(14px);
+            backdrop-filter: blur(16px);
             animation: card-in 0.38s ease both;
         }}
 
@@ -319,8 +321,8 @@ def render_page(title, body_html):
             content: "";
             position: absolute;
             inset: 0 0 auto;
-            height: 8px;
-            background: linear-gradient(90deg, var(--lime), var(--lime-strong), #24351e);
+            height: 5px;
+            background: linear-gradient(90deg, transparent, var(--accent), var(--accent-strong), transparent);
         }}
 
         @keyframes card-in {{
@@ -371,9 +373,10 @@ def render_page(title, body_html):
         .section {{
             margin-bottom: 22px;
             padding: 18px;
-            border-radius: 22px;
-            background: rgba(246, 250, 239, 0.72);
-            border: 1px solid rgba(221, 232, 209, 0.72);
+            border-radius: 24px;
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid var(--line);
+            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.045);
         }}
 
         .section-title {{
@@ -409,8 +412,8 @@ def render_page(title, body_html):
         textarea {{
             width: 100%;
             padding: 13px 14px;
-            border: 1px solid #cddbc0;
-            border-radius: 15px;
+            border: 1px solid #d8dee8;
+            border-radius: 16px;
             font-size: 0.96rem;
             outline: none;
             color: var(--ink);
@@ -423,8 +426,8 @@ def render_page(title, body_html):
         input[type=date]:focus,
         select:focus,
         textarea:focus {{
-            border-color: var(--lime-strong);
-            box-shadow: 0 0 0 4px rgba(183, 242, 51, 0.22);
+            border-color: var(--accent-strong);
+            box-shadow: 0 0 0 4px rgba(168, 231, 46, 0.16);
             transform: translateY(-1px);
         }}
 
@@ -439,17 +442,17 @@ def render_page(title, body_html):
             padding: 12px 16px;
             font-size: 0.95rem;
             font-weight: 900;
-            color: #14210f;
+            color: #111827;
             cursor: pointer;
-            background: linear-gradient(135deg, var(--lime), var(--lime-strong));
-            box-shadow: 0 13px 26px rgba(143, 212, 20, 0.28);
+            background: linear-gradient(135deg, #111827, #273449);
+            box-shadow: 0 13px 26px rgba(15, 23, 42, 0.18);
             transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
         }}
 
         button:hover {{
             filter: saturate(1.08);
             transform: translateY(-2px);
-            box-shadow: 0 16px 32px rgba(143, 212, 20, 0.34);
+            box-shadow: 0 16px 32px rgba(15, 23, 42, 0.20);
         }}
 
         button:active {{
@@ -459,8 +462,14 @@ def render_page(title, body_html):
         .btn-outline {{
             background: rgba(255, 255, 255, 0.88);
             color: var(--ink);
-            border: 1px solid rgba(65, 81, 61, 0.20);
+            border: 1px solid rgba(148, 163, 184, 0.35);
             box-shadow: none;
+        }}
+
+        .btn-full:not(.btn-outline):not(.btn-danger):not(.btn-warning) {{
+            color: #111827;
+            background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+            box-shadow: 0 14px 28px rgba(114, 196, 20, 0.22);
         }}
 
         .btn-danger {{
@@ -493,8 +502,8 @@ def render_page(title, body_html):
         }}
 
         .msg {{
-            background: #eefbdc;
-            border: 1px solid #b9e889;
+            background: var(--accent-soft);
+            border: 1px solid rgba(168, 231, 46, 0.48);
         }}
 
         .erro {{
@@ -519,7 +528,7 @@ def render_page(title, body_html):
             text-align: left;
             padding: 8px 10px;
             color: var(--ink-soft);
-            background: rgba(183, 242, 51, 0.18);
+            background: var(--surface-muted);
             font-size: 0.78rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
@@ -550,7 +559,7 @@ def render_page(title, body_html):
             overflow-wrap: break-word;
             padding: 4px 6px;
             border-radius: 8px;
-            background: #eef7df;
+            background: var(--surface-muted);
             font-size: 0.8rem;
         }}
 
@@ -568,7 +577,8 @@ def render_page(title, body_html):
             margin: 14px 0 10px;
             padding: 16px;
             border-radius: 20px;
-            background: linear-gradient(180deg, rgba(183, 242, 51, 0.13), rgba(255, 255, 255, 0.82));
+            background: var(--surface-soft);
+            border: 1px solid var(--line);
         }}
 
         .rating-label {{
@@ -596,12 +606,12 @@ def render_page(title, body_html):
 
         .stars label:hover,
         .stars label:hover ~ label {{
-            color: #d7ff44;
+            color: var(--accent);
             transform: translateY(-1px);
         }}
 
         .stars input:checked ~ label {{
-            color: var(--lime-strong);
+            color: var(--accent-strong);
         }}
 
         .rating-text {{
@@ -620,9 +630,19 @@ def render_page(title, body_html):
         .stat-card {{
             padding: 18px;
             border-radius: 20px;
-            background: linear-gradient(145deg, rgba(183, 242, 51, 0.22), rgba(255, 255, 255, 0.88));
-            border: 1px solid rgba(143, 212, 20, 0.22);
-            box-shadow: 0 12px 28px rgba(23, 33, 22, 0.06);
+            background: linear-gradient(180deg, #ffffff, var(--surface-soft));
+            border: 1px solid var(--line);
+            box-shadow: 0 14px 30px rgba(15, 23, 42, 0.06);
+            position: relative;
+            overflow: hidden;
+        }}
+
+        .stat-card::before {{
+            content: "";
+            position: absolute;
+            inset: 0 auto 0 0;
+            width: 4px;
+            background: var(--accent);
         }}
 
         .stat-label {{
@@ -646,7 +666,8 @@ def render_page(title, body_html):
             padding: 18px;
             border-radius: 20px;
             border: 1px solid var(--line);
-            background: rgba(255, 255, 255, 0.86);
+            background: #ffffff;
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.045);
         }}
 
         .review-top {{
@@ -2043,14 +2064,14 @@ def print_label():
             padding: 20px;
             text-align: center;
             border-radius: 24px;
-            background: linear-gradient(180deg, #ffffff, #f6faef);
-            border: 2px dashed rgba(143, 212, 20, 0.42);
+            background: linear-gradient(180deg, #ffffff, #f8fafc);
+            border: 2px dashed rgba(168, 231, 46, 0.46);
             box-shadow: 0 16px 38px rgba(23, 33, 22, 0.12);
         }}
 
         .label-eyebrow {{
             margin-bottom: 8px;
-            color: #648f0d;
+            color: #72c414;
             font-size: 0.78rem;
             font-weight: 800;
             letter-spacing: 0.08em;
@@ -2077,7 +2098,7 @@ def print_label():
             padding: 10px;
             border-radius: 22px;
             background: white;
-            border: 1px solid #dde8d1;
+            border: 1px solid #e2e8f0;
         }}
 
         .label-footer {{
