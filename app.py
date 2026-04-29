@@ -1167,37 +1167,8 @@ def ensure_db():
 def index():
     user = current_user()
     if user:
-        role_map = {
-            "admin": "Administrador",
-            "cashier": "Caixa",
-            "driver": "Motorista",
-            "manager": "Gestor",
-        }
-        role_text = role_map.get(user["role"], "Usuario")
-        dashboard_url = dashboard_url_for_role(user["role"])
-        buttons = f'<p><button class="btn-full" onclick="window.location.href=\'{dashboard_url}\'">Acessar meu painel</button></p>'
-        buttons += '<p><button class="btn-full btn-outline" onclick="window.location.href=\'/logout\'">Sair</button></p>'
-
-        body = f"""
-        <h1>Bem-vindo</h1>
-        <p class="subtitle-center">LemonRate organiza avaliacoes, comentarios e etiquetas QR em um painel simples e profissional.</p>
-        <p style="text-align:center; margin-bottom: 18px;">
-            Logado como: <strong>{esc(user['name'])} ({esc(role_text)})</strong>
-        </p>
-        {buttons}
-        """
-    else:
-        body = """
-        <h1>LemonRate</h1>
-        <p class="subtitle-center">
-            Avaliacoes de entrega com controle de QR, motoristas, caixas e gestores em um unico lugar.
-        </p>
-        <div class="section">
-            <button class="btn-full" onclick="window.location.href='/login'">Entrar no sistema</button>
-        </div>
-        """
-
-    return render_page("Inicio", body)
+        return redirect(dashboard_url_for_role(user["role"]))
+    return redirect(url_for("login"))
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -1229,9 +1200,6 @@ def login():
         <input type="password" name="password" required>
         <button type="submit" class="btn-full">Entrar</button>
     </form>
-    <div class="section">
-        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/'">Voltar</button>
-    </div>
     """
     return render_page("Login", body)
 
