@@ -1,5 +1,11 @@
+import base64
+import hashlib
+import hmac
 import os
+import secrets
 import sqlite3
+import struct
+import time
 import uuid
 from datetime import datetime, timedelta
 from functools import wraps
@@ -25,6 +31,7 @@ DATABASE = os.environ.get("DATABASE_PATH", "avaliacao_entregadores.db")
 DEFAULT_ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "FARMALIMA")
 DEFAULT_ADMIN_NAME = os.environ.get("ADMIN_NAME", "Administrador")
 DEFAULT_ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "FarmalimaAvalia3535")
+ADMIN_RECOVERY_CODE = os.environ.get("ADMIN_RECOVERY_CODE", "").strip()
 TRUST_PROXY_HEADERS = os.environ.get("TRUST_PROXY_HEADERS", "1") == "1"
 LABEL_TOKEN_EXPIRY_HOURS = int(os.environ.get("LABEL_TOKEN_EXPIRY_HOURS", "48"))
 
@@ -83,7 +90,8 @@ def init_db():
             username TEXT UNIQUE NOT NULL,
             name TEXT NOT NULL,
             role TEXT NOT NULL CHECK (role IN ('admin', 'cashier', 'driver', 'manager')),
-            password_hash TEXT NOT NULL
+            password_hash TEXT NOT NULL,
+            totp_secret TEXT
         );
         """
     )
@@ -135,10 +143,16 @@ def init_db():
             CHECK (role IN ('admin', 'cashier', 'driver', 'manager'));
             """
         )
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT;")
         conn.execute("ALTER TABLE ratings ADD COLUMN IF NOT EXISTS ip TEXT;")
         conn.execute("ALTER TABLE ratings ADD COLUMN IF NOT EXISTS comment TEXT;")
         conn.execute("ALTER TABLE rating_tokens ADD COLUMN IF NOT EXISTS invoice_number TEXT NOT NULL DEFAULT '';")
     else:
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT;")
+        except DB_OPERATIONAL_ERRORS:
+            pass
+
         try:
             conn.execute("ALTER TABLE ratings ADD COLUMN ip TEXT;")
         except DB_OPERATIONAL_ERRORS:
@@ -825,6 +839,63 @@ def authenticate_any_role(username, password):
     return None
 
 
+def generate_totp_secret():
+    return base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+
+
+def normalize_totp_secret(secret):
+    secret = (secret or "").replace(" ", "").upper()
+    padding = "=" * ((8 - len(secret) % 8) % 8)
+    return secret + padding
+
+
+def hotp(secret, counter):
+    key = base64.b32decode(normalize_totp_secret(secret))
+    msg = struct.pack(">Q", counter)
+    digest = hmac.new(key, msg, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return f"{code % 1000000:06d}"
+
+
+def verify_totp_code(secret, code, window=1):
+    code = "".join(ch for ch in (code or "") if ch.isdigit())
+    if len(code) != 6 or not secret:
+        return False
+    counter = int(time.time() // 30)
+    for drift in range(-window, window + 1):
+        if hmac.compare_digest(hotp(secret, counter + drift), code):
+            return True
+    return False
+
+
+def get_or_create_totp_secret(user):
+    secret = user["totp_secret"] if "totp_secret" in user.keys() else None
+    if secret:
+        return secret, False
+    secret = generate_totp_secret()
+    db = get_db()
+    db.execute("UPDATE users SET totp_secret = ? WHERE id = ?", (secret, user["id"]))
+    db.commit()
+    return secret, True
+
+
+def totp_provisioning_uri(username, secret):
+    issuer = "LemonRate"
+    label = f"{issuer}:{username}"
+    return (
+        "otpauth://totp/"
+        f"{quote(label, safe='')}?secret={quote(secret, safe='')}"
+        f"&issuer={quote(issuer, safe='')}&digits=6&period=30"
+    )
+
+
+def get_primary_admin():
+    return get_db().execute(
+        "SELECT * FROM users WHERE role = 'admin' ORDER BY id LIMIT 1"
+    ).fetchone()
+
+
 def dashboard_url_for_role(role):
     if role == "admin":
         return url_for("admin_dashboard")
@@ -1200,6 +1271,9 @@ def login():
         <input type="password" name="password" required>
         <button type="submit" class="btn-full">Entrar</button>
     </form>
+    <p style="text-align:center; margin-top: 14px;">
+        <a href="/admin/recover" style="color: var(--primary); font-weight: 800; text-decoration: none;">Recuperar acesso do administrador</a>
+    </p>
     """
     return render_page("Login", body)
 
@@ -1212,6 +1286,77 @@ def legacy_login_redirect():
     if request.method == "POST":
         return login()
     return redirect(url_for("login"))
+
+
+@app.route("/admin/recover", methods=["GET", "POST"])
+def admin_recover():
+    msg = ""
+    error = ""
+
+    if not ADMIN_RECOVERY_CODE:
+        error = "Recuperacao desativada. Configure ADMIN_RECOVERY_CODE no ambiente do deploy."
+    elif request.method == "POST":
+        recovery_code = request.form.get("recovery_code", "").strip()
+        new_username = request.form.get("new_username", "").strip()
+        new_password = request.form.get("new_password", "")
+        confirm_password = request.form.get("confirm_password", "")
+        admin = get_primary_admin()
+
+        if not hmac.compare_digest(recovery_code, ADMIN_RECOVERY_CODE):
+            error = "Codigo de recuperacao invalido."
+        elif not admin:
+            error = "Administrador nao encontrado."
+        elif not new_username:
+            error = "Informe o novo usuario do administrador."
+        elif len(new_password) < 6:
+            error = "A nova senha precisa ter pelo menos 6 caracteres."
+        elif new_password != confirm_password:
+            error = "A confirmacao da nova senha nao confere."
+        elif get_db().execute(
+            "SELECT id FROM users WHERE username = ? AND id <> ?",
+            (new_username, admin["id"]),
+        ).fetchone():
+            error = "Ja existe outro usuario com esse login."
+        else:
+            db = get_db()
+            db.execute(
+                """
+                UPDATE users
+                SET username = ?, password_hash = ?, totp_secret = NULL
+                WHERE id = ? AND role = 'admin'
+                """,
+                (new_username, generate_password_hash(new_password), admin["id"]),
+            )
+            db.commit()
+            msg = "Acesso do administrador redefinido. Entre com o novo usuario e senha e cadastre o Google Authenticator."
+
+    msg_html = f'<div class="msg">{esc(msg)}</div>' if msg else ""
+    error_html = f'<div class="erro">{esc(error)}</div>' if error else ""
+    disabled = " disabled" if not ADMIN_RECOVERY_CODE else ""
+
+    body = f"""
+    <h1>Recuperar Admin</h1>
+    <p class="subtitle-center">Use o codigo de recuperacao configurado no ambiente para redefinir usuario e senha.</p>
+    {msg_html}
+    {error_html}
+
+    <form method="post" class="section">
+        <label>Codigo de recuperacao</label>
+        <input type="password" name="recovery_code" required{disabled}>
+        <label>Novo usuario do administrador</label>
+        <input type="text" name="new_username" value="{esc(DEFAULT_ADMIN_USERNAME)}" required{disabled}>
+        <label>Nova senha do administrador</label>
+        <input type="password" name="new_password" minlength="6" required{disabled}>
+        <label>Confirmar nova senha</label>
+        <input type="password" name="confirm_password" minlength="6" required{disabled}>
+        <button type="submit" class="btn-full"{disabled}>Redefinir acesso</button>
+    </form>
+
+    <div class="section">
+        <button class="btn-full btn-outline" type="button" onclick="window.location.href='/login'">Voltar para o login</button>
+    </div>
+    """
+    return render_page("Recuperar Admin", body)
 
 
 @app.route("/manager/dashboard")
@@ -1355,18 +1500,22 @@ def admin_dashboard():
 @login_required(role="admin")
 def admin_change_password():
     user = current_user()
+    totp_secret, secret_created = get_or_create_totp_secret(user)
     msg = ""
     error = ""
 
     if request.method == "POST":
         new_username = request.form.get("new_username", "").strip()
         current_password = request.form.get("current_password", "")
+        auth_code = request.form.get("auth_code", "").strip()
         new_password = request.form.get("new_password", "")
         confirm_password = request.form.get("confirm_password", "")
         wants_password_change = bool(new_password or confirm_password)
 
         if not check_password_hash(user["password_hash"], current_password):
             error = "Senha atual incorreta."
+        elif not verify_totp_code(totp_secret, auth_code):
+            error = "Codigo do Google Authenticator invalido."
         elif not new_username:
             error = "Informe o novo usuario do administrador."
         elif get_db().execute(
@@ -1401,21 +1550,44 @@ def admin_change_password():
                 msg = "Usuario e senha do administrador atualizados com sucesso."
 
     user = current_user()
+    totp_secret = user["totp_secret"]
+    qr_data = totp_provisioning_uri(user["username"], totp_secret)
+    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=220x220&data={quote(qr_data, safe='')}"
 
     msg_html = f'<div class="msg">{esc(msg)}</div>' if msg else ""
     error_html = f'<div class="erro">{esc(error)}</div>' if error else ""
+    setup_notice = (
+        "Escaneie este QR Code no Google Authenticator antes de salvar qualquer alteracao."
+        if secret_created
+        else "Use o codigo de 6 digitos do Google Authenticator para confirmar alteracoes."
+    )
 
     body = f"""
     <h1>Alterar Usuario e Senha</h1>
-    <p class="subtitle-center">Atualize o login do administrador logado. A nova senha e opcional.</p>
+    <p class="subtitle-center">Atualize o login do administrador logado. Toda alteracao exige Google Authenticator.</p>
     {msg_html}
     {error_html}
+
+    <div class="section">
+        <div class="section-title">Google Authenticator</div>
+        <div class="section-subtitle">{esc(setup_notice)}</div>
+        <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap;">
+            <img src="{esc(qr_url)}" alt="QR Code Google Authenticator" style="width:150px; height:150px; border-radius:18px; border:1px solid var(--line); background:white; padding:8px;">
+            <div>
+                <p><strong>Chave manual:</strong></p>
+                <code>{esc(totp_secret)}</code>
+                <p class="section-subtitle">No aplicativo, escolha adicionar conta e escaneie o QR Code ou digite a chave manual.</p>
+            </div>
+        </div>
+    </div>
 
     <form method="post" class="section">
         <label>Novo usuario do administrador</label>
         <input type="text" name="new_username" value="{esc(user['username'])}" required>
         <label>Senha atual</label>
         <input type="password" name="current_password" required>
+        <label>Codigo do Google Authenticator</label>
+        <input type="text" name="auth_code" inputmode="numeric" pattern="[0-9]{{6}}" maxlength="6" placeholder="000000" required>
         <label>Nova senha</label>
         <input type="password" name="new_password" minlength="6" placeholder="Deixe em branco para manter a senha atual">
         <label>Confirmar nova senha</label>
