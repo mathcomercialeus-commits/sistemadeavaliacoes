@@ -91,7 +91,8 @@ def init_db():
             name TEXT NOT NULL,
             role TEXT NOT NULL CHECK (role IN ('admin', 'cashier', 'driver', 'manager')),
             password_hash TEXT NOT NULL,
-            totp_secret TEXT
+            totp_secret TEXT,
+            totp_confirmed_at TIMESTAMP
         );
         """
     )
@@ -144,12 +145,18 @@ def init_db():
             """
         )
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT;")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_confirmed_at TIMESTAMP;")
         conn.execute("ALTER TABLE ratings ADD COLUMN IF NOT EXISTS ip TEXT;")
         conn.execute("ALTER TABLE ratings ADD COLUMN IF NOT EXISTS comment TEXT;")
         conn.execute("ALTER TABLE rating_tokens ADD COLUMN IF NOT EXISTS invoice_number TEXT NOT NULL DEFAULT '';")
     else:
         try:
             conn.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT;")
+        except DB_OPERATIONAL_ERRORS:
+            pass
+
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN totp_confirmed_at TIMESTAMP;")
         except DB_OPERATIONAL_ERRORS:
             pass
 
@@ -871,8 +878,9 @@ def verify_totp_code(secret, code, window=1):
 
 def get_or_create_totp_secret(user):
     secret = user["totp_secret"] if "totp_secret" in user.keys() else None
+    confirmed_at = user["totp_confirmed_at"] if "totp_confirmed_at" in user.keys() else None
     if secret:
-        return secret, False
+        return secret, not bool(confirmed_at)
     secret = generate_totp_secret()
     db = get_db()
     db.execute("UPDATE users SET totp_secret = ? WHERE id = ?", (secret, user["id"]))
@@ -1322,7 +1330,7 @@ def admin_recover():
             db.execute(
                 """
                 UPDATE users
-                SET username = ?, password_hash = ?, totp_secret = NULL
+                SET username = ?, password_hash = ?, totp_secret = NULL, totp_confirmed_at = NULL
                 WHERE id = ? AND role = 'admin'
                 """,
                 (new_username, generate_password_hash(new_password), admin["id"]),
@@ -1500,7 +1508,7 @@ def admin_dashboard():
 @login_required(role="admin")
 def admin_change_password():
     user = current_user()
-    totp_secret, secret_created = get_or_create_totp_secret(user)
+    totp_secret, setup_required = get_or_create_totp_secret(user)
     msg = ""
     error = ""
 
@@ -1536,6 +1544,8 @@ def admin_change_password():
             if wants_password_change:
                 updates.append("password_hash = ?")
                 params.append(generate_password_hash(new_password))
+            if setup_required:
+                updates.append("totp_confirmed_at = CURRENT_TIMESTAMP")
 
             if not updates:
                 msg = "Nenhuma alteracao foi feita."
@@ -1547,20 +1557,41 @@ def admin_change_password():
                     tuple(params),
                 )
                 db.commit()
-                msg = "Usuario e senha do administrador atualizados com sucesso."
+                if setup_required and new_username == user["username"] and not wants_password_change:
+                    msg = "Google Authenticator ativado com sucesso."
+                else:
+                    msg = "Usuario e senha do administrador atualizados com sucesso."
 
     user = current_user()
     totp_secret = user["totp_secret"]
-    qr_data = totp_provisioning_uri(user["username"], totp_secret)
-    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=220x220&data={quote(qr_data, safe='')}"
+    setup_required = not bool(user["totp_confirmed_at"])
 
     msg_html = f'<div class="msg">{esc(msg)}</div>' if msg else ""
     error_html = f'<div class="erro">{esc(error)}</div>' if error else ""
-    setup_notice = (
-        "Escaneie este QR Code no Google Authenticator antes de salvar qualquer alteracao."
-        if secret_created
-        else "Use o codigo de 6 digitos do Google Authenticator para confirmar alteracoes."
-    )
+    if setup_required:
+        qr_data = totp_provisioning_uri(user["username"], totp_secret)
+        qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=220x220&data={quote(qr_data, safe='')}"
+        authenticator_section = f"""
+        <div class="section">
+            <div class="section-title">Ativar Google Authenticator</div>
+            <div class="section-subtitle">Esta chave aparece somente ate a primeira confirmacao. Escaneie no celular da pessoa autorizada.</div>
+            <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap;">
+                <img src="{esc(qr_url)}" alt="QR Code Google Authenticator" style="width:150px; height:150px; border-radius:18px; border:1px solid var(--line); background:white; padding:8px;">
+                <div>
+                    <p><strong>Chave manual:</strong></p>
+                    <code>{esc(totp_secret)}</code>
+                    <p class="section-subtitle">Depois que o primeiro codigo valido for confirmado, esta chave nao sera mais exibida.</p>
+                </div>
+            </div>
+        </div>
+        """
+    else:
+        authenticator_section = """
+        <div class="section">
+            <div class="section-title">Google Authenticator ativo</div>
+            <div class="section-subtitle">A chave do Authenticator ja foi ativada e nao e mais exibida. Use apenas o codigo de 6 digitos do celular autorizado.</div>
+        </div>
+        """
 
     body = f"""
     <h1>Alterar Usuario e Senha</h1>
@@ -1568,18 +1599,7 @@ def admin_change_password():
     {msg_html}
     {error_html}
 
-    <div class="section">
-        <div class="section-title">Google Authenticator</div>
-        <div class="section-subtitle">{esc(setup_notice)}</div>
-        <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap;">
-            <img src="{esc(qr_url)}" alt="QR Code Google Authenticator" style="width:150px; height:150px; border-radius:18px; border:1px solid var(--line); background:white; padding:8px;">
-            <div>
-                <p><strong>Chave manual:</strong></p>
-                <code>{esc(totp_secret)}</code>
-                <p class="section-subtitle">No aplicativo, escolha adicionar conta e escaneie o QR Code ou digite a chave manual.</p>
-            </div>
-        </div>
-    </div>
+    {authenticator_section}
 
     <form method="post" class="section">
         <label>Novo usuario do administrador</label>
